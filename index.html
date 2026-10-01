@@ -39,7 +39,7 @@ textarea{min-height:110px}
 </head>
 <body>
 <main>
-<h1>Meeting Sidekick <span style="font-weight:400">v4</span></h1>
+<h1>Meeting Sidekick <span style="font-weight:400">v5</span></h1>
 
 <div class="bar">
  <button id="startBtn" class="primary">Start listening</button>
@@ -106,7 +106,16 @@ textarea{min-height:110px}
   if(s){ if(s.names)$('names').value=s.names; if(s.stories)$('stories').value=s.stories; if(s.context)$('context').value=s.context; if(s.apikey)$('apikey').value=s.apikey; if(s.wsid)$('wsid').value=s.wsid; }
  }catch(e){}}
  function save(){try{localStorage.setItem('sidekick',JSON.stringify({names:$('names').value,stories:$('stories').value,context:$('context').value,apikey:$('apikey').value,wsid:$('wsid').value}))}catch(e){}}
- load(); $('saveBtn').onclick=function(){save();this.textContent='Saved';var b=this;setTimeout(function(){b.textContent='Save settings'},1500)};
+ function storageCheck(){ try{ localStorage.setItem('sk_test','1'); var ok=localStorage.getItem('sk_test')==='1'; localStorage.removeItem('sk_test'); return ok?'ok':'read-back failed'; }catch(e){ return 'blocked ('+e.name+')'; } }
+ load();
+ $('saveBtn').onclick=function(){
+  var b=this; save();
+  var back=null; try{ back=JSON.parse(localStorage.getItem('sidekick')||'null'); }catch(e){}
+  var ok=back && back.context===$('context').value && back.apikey===$('apikey').value;
+  b.textContent= ok ? 'Saved ✓' : ('NOT saved - storage '+storageCheck());
+  setTimeout(function(){b.textContent='Save settings'},4000);
+ };
+ ['names','stories','context','apikey','wsid'].forEach(function(id){ var el=$(id); if(el) el.addEventListener('change',save); });
 
  // Claude via Anthropic API (direct from this phone)
  var MODEL='claude-haiku-4-5-20251001';
@@ -216,6 +225,8 @@ textarea{min-height:110px}
   out.push('origin: '+location.origin);
   try{ var pp=document.permissionsPolicy||document.featurePolicy; out.push('policy allows microphone: '+(pp&&pp.allowsFeature?pp.allowsFeature('microphone'):'unknown')); }catch(e){ out.push('policy check failed'); }
   try{ if(navigator.permissions){ var st=await navigator.permissions.query({name:'microphone'}); out.push('permission state: '+st.state); } }catch(e){ out.push('permission query: n/a'); }
+  out.push('storage: '+storageCheck());
+  try{ var sv=JSON.parse(localStorage.getItem('sidekick')||'null'); out.push('saved settings found: '+!!sv+(sv?(' (context '+(sv.context||'').length+' chars, key '+((sv.apikey||'').length?'yes':'no')+')'):'')); }catch(e){ out.push('saved settings: unreadable'); }
   out.push('speech API present: '+!!(window.SpeechRecognition||window.webkitSpeechRecognition));
   try{ var stream=await navigator.mediaDevices.getUserMedia({audio:true}); out.push('getUserMedia: OK'); stream.getTracks().forEach(function(t){t.stop()}); }
   catch(e){ out.push('getUserMedia: '+e.name+' - '+e.message); }

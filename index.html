@@ -127,12 +127,14 @@ textarea{min-height:110px}
   $('transcript').scrollTop=$('transcript').scrollHeight;
  }
 
+ var pending=null, pendingReason=null;
+ function schedule(reason){ pendingReason=pendingReason||reason; if(pending) clearTimeout(pending); pending=setTimeout(function(){ var r=pendingReason; pending=null; pendingReason=null; fire(r,false); },4000); }
  function checkTrigger(text){
   var low=' '+text.toLowerCase().replace(/[^a-z0-9 ]/g,' ')+' ';
   var hit=null;
   list($('names').value).forEach(function(n){ if(!hit && low.indexOf(' '+n+' ')>-1) hit='name: '+n; });
   if(!hit){ list($('stories').value).forEach(function(n){ var d=n.replace(/\D/g,''); if(d && !hit && low.replace(/ /g,'').indexOf(d)>-1) hit='story: '+d; }); }
-  if(hit) fire(hit,false);
+  if(hit) schedule(hit);
  }
 
  function fire(reason,manual){
@@ -148,7 +150,7 @@ textarea{min-height:110px}
   $('trigger').textContent='Heard '+reason+' at '+new Date().toLocaleTimeString();
   var prompt='You help the user (named in the context) during a live work call. '+
    'Below is the last two minutes of an automatic transcript (it has errors) and his current context. '+
-   'If someone is asking the user something or it is their turn, reply with ONE or TWO short spoken sentences they can say: plain, friendly, junior tone, no jargon beyond what the call used, never promise dates or decisions that belong to others. '+
+   'If the user's name (or a misheard version of it) appears just before or after a question or request, treat that question as directed at them. If someone is asking the user something or it is their turn, reply with ONE or TWO short spoken sentences they can say: plain, friendly, junior tone, no jargon beyond what the call used, never promise dates or decisions that belong to others. '+
    'If nothing is being asked of him, reply exactly: Nothing for you.\n\n'+
    'CONTEXT:\n'+$('context').value+'\n\nTRANSCRIPT:\n'+recentText(WINDOW_MS);
   sample(prompt,{max:200})
@@ -175,6 +177,7 @@ textarea{min-height:110px}
     else interim+=r[0].transcript;
    }
    var cutoff=Date.now()-3*60*60*1000; while(segs.length && segs[0].t<cutoff) segs.shift();
+   if(pending) schedule(pendingReason);
    renderTranscript(interim);
   };
   rec.onerror=function(ev){ $('diag').textContent+='speech error: '+ev.error+(ev.message?(' ('+ev.message+')'):'')+'\n'; if(ev.error==='not-allowed'||ev.error==='service-not-allowed'||ev.error==='audio-capture'){ running=false; setUI(); $('replyText').textContent='Speech stopped: '+ev.error+'. See the diagnostic lines above.'; } };

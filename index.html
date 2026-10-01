@@ -39,7 +39,7 @@ textarea{min-height:110px}
 </head>
 <body>
 <main>
-<h1>Meeting Sidekick <span style="font-weight:400">v5</span></h1>
+<h1>Meeting Sidekick <span style="font-weight:400">v6</span></h1>
 
 <div class="bar">
  <button id="startBtn" class="primary">Start listening</button>
@@ -159,8 +159,8 @@ textarea{min-height:110px}
   $('trigger').textContent='Heard '+reason+' at '+new Date().toLocaleTimeString()+(($('context').value.trim())?'':' (context is EMPTY - add it in Settings)');
   var prompt='You help the user (named in the context) during a live work call. '+
    'Below is the last two minutes of an automatic transcript (it has errors) and his current context. '+
-   'If the user's name (or a misheard version of it) appears just before or after a question or request, treat that question as directed at them. If someone is asking the user something or it is their turn, reply with ONE or TWO short spoken sentences they can say: plain, friendly, junior tone, no jargon beyond what the call used, never promise dates or decisions that belong to others. '+
-   'This was triggered because the user's name or one of their work items was just heard, so ALWAYS give your best one or two sentence suggestion. If the question is unclear in the transcript, suggest a polite short line asking them to repeat it, or a brief status line from the context about the item that was mentioned.\n\n'+
+   'If the user\'s name (or a misheard version of it) appears just before or after a question or request, treat that question as directed at them. If someone is asking the user something or it is their turn, reply with ONE or TWO short spoken sentences they can say: plain, friendly, junior tone, no jargon beyond what the call used, never promise dates or decisions that belong to others. '+
+   'This was triggered because the user\'s name or one of their work items was just heard, so ALWAYS give your best one or two sentence suggestion. If the question is unclear in the transcript, suggest a polite short line asking them to repeat it, or a brief status line from the context about the item that was mentioned.\n\n'+
    'CONTEXT:\n'+$('context').value+'\n\nTRANSCRIPT:\n'+recentText(WINDOW_MS);
   sample(prompt,{max:200})
    .then(function(r){ $('replyText').textContent=r.text; replies++; $('replyCount').textContent=replies; })

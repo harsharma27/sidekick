@@ -63,6 +63,9 @@ textarea{min-height:110px}
  <label>Anthropic API key (stays on this phone)
   <input id="apikey" type="password" autocomplete="off" placeholder="sk-ant-...">
  </label>
+ <label>Workspace ID (only if the key asks for one)
+  <input id="wsid" autocomplete="off" placeholder="wrkspc_...">
+ </label>
  <label>Your name and how it gets misheard (comma separated)
   <input id="names" value="" placeholder="e.g. your name, common mishearings">
  </label>
@@ -100,9 +103,9 @@ textarea{min-height:110px}
  // settings
  function load(){try{
   var s=JSON.parse(localStorage.getItem('sidekick')||'null');
-  if(s){ if(s.names)$('names').value=s.names; if(s.stories)$('stories').value=s.stories; if(s.context)$('context').value=s.context; if(s.apikey)$('apikey').value=s.apikey; }
+  if(s){ if(s.names)$('names').value=s.names; if(s.stories)$('stories').value=s.stories; if(s.context)$('context').value=s.context; if(s.apikey)$('apikey').value=s.apikey; if(s.wsid)$('wsid').value=s.wsid; }
  }catch(e){}}
- function save(){try{localStorage.setItem('sidekick',JSON.stringify({names:$('names').value,stories:$('stories').value,context:$('context').value,apikey:$('apikey').value}))}catch(e){}}
+ function save(){try{localStorage.setItem('sidekick',JSON.stringify({names:$('names').value,stories:$('stories').value,context:$('context').value,apikey:$('apikey').value,wsid:$('wsid').value}))}catch(e){}}
  load(); $('saveBtn').onclick=function(){save();this.textContent='Saved';var b=this;setTimeout(function(){b.textContent='Save settings'},1500)};
 
  // Claude via Anthropic API (direct from this phone)
@@ -110,8 +113,9 @@ textarea{min-height:110px}
  sample=function(prompt,opts){
   var key=$('apikey').value.trim();
   if(!key) return Promise.reject({code:'no_key',message:'Add your API key in Settings.'});
-  return fetch('https://api.anthropic.com/v1/messages',{method:'POST',headers:{
-    'content-type':'application/json','x-api-key':key,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},
+  var h={'content-type':'application/json','x-api-key':key,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'};
+  var ws=$('wsid').value.trim(); if(ws) h['anthropic-workspace-id']=ws;
+  return fetch('https://api.anthropic.com/v1/messages',{method:'POST',headers:h,
     body:JSON.stringify({model:MODEL,max_tokens:(opts&&opts.max)||300,messages:[{role:'user',content:prompt}]})})
    .then(function(r){return r.json().then(function(j){ if(!r.ok) throw {code:'http_'+r.status,message:(j.error&&j.error.message)||'API error'}; return {text:(j.content||[]).filter(function(c){return c.type==='text'}).map(function(c){return c.text}).join('\n')}; })});
  };
@@ -162,7 +166,12 @@ textarea{min-height:110px}
    var interim='';
    for(var i=ev.resultIndex;i<ev.results.length;i++){
     var r=ev.results[i];
-    if(r.isFinal){ var t=r[0].transcript.trim(); if(t){ segs.push({t:Date.now(),text:t}); checkTrigger(t); } }
+    if(r.isFinal){ var t=r[0].transcript.trim(); if(t){
+      var last=segs.length?segs[segs.length-1]:null;
+      if(last && Date.now()-last.t<15000 && t.toLowerCase().indexOf(last.text.toLowerCase())===0){ last.text=t; last.t=Date.now(); }
+      else if(last && last.text.toLowerCase().indexOf(t.toLowerCase())===0){ /* shorter repeat, skip */ }
+      else { segs.push({t:Date.now(),text:t}); }
+      checkTrigger(t); } }
     else interim+=r[0].transcript;
    }
    var cutoff=Date.now()-3*60*60*1000; while(segs.length && segs[0].t<cutoff) segs.shift();

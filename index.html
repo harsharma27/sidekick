@@ -39,7 +39,7 @@ textarea{min-height:110px}
 </head>
 <body>
 <main>
-<h1>Meeting Sidekick <span style="font-weight:400">v7.1</span></h1>
+<h1>Meeting Sidekick <span style="font-weight:400">v8</span></h1>
 
 <div class="bar">
  <button id="startBtn" class="primary">Start listening</button>
@@ -47,9 +47,12 @@ textarea{min-height:110px}
  <button id="askBtn" disabled>Ask now</button>
  <button id="wrapBtn" disabled>Wrap</button>
  <button id="diagBtn">Mic test</button>
+ <button id="driveBtn">Connect Drive</button>
 </div>
 
 <div id="diag" style="font-family:'IBM Plex Mono',monospace;font-size:13px;margin-bottom:10px;white-space:pre-wrap"></div>
+<div id="warn" style="display:none;background:#b4441c;color:#fff;padding:10px 12px;border-radius:10px;margin-bottom:10px;font-weight:600"></div>
+<div id="driveStatus" style="font-size:13px;color:var(--muted);margin-bottom:8px">Drive brief: not connected</div>
 <div id="status">Mic: <b id="micState" class="off">off</b> · restarts: <b id="restarts">0</b> · replies: <b id="replyCount">0</b></div>
 
 <div id="reply">
@@ -65,6 +68,12 @@ textarea{min-height:110px}
  </label>
  <label>Workspace ID (only if the key asks for one)
   <input id="wsid" autocomplete="off" placeholder="wrkspc_...">
+ </label>
+ <label>Google client ID (for Drive brief sync)
+  <input id="gcid" autocomplete="off" placeholder="....apps.googleusercontent.com">
+ </label>
+ <label>Drive folder ID (Sidekick folder)
+  <input id="gfolder" autocomplete="off" value="1uE4jqez2KWso72d1MR8oEL0eb6Q0nGHV">
  </label>
  <label>Your name and how it gets misheard (comma separated)
   <input id="names" value="" placeholder="e.g. your name, common mishearings">
@@ -106,9 +115,9 @@ textarea{min-height:110px}
  // settings
  function load(){try{
   var s=JSON.parse(localStorage.getItem('sidekick')||'null');
-  if(s){ if(s.names)$('names').value=s.names; if(s.stories)$('stories').value=s.stories; if(s.context)$('context').value=s.context; if(s.apikey)$('apikey').value=s.apikey; if(s.wsid)$('wsid').value=s.wsid; if(s.brief)$('brief').value=s.brief; }
+  if(s){ if(s.names)$('names').value=s.names; if(s.stories)$('stories').value=s.stories; if(s.context)$('context').value=s.context; if(s.apikey)$('apikey').value=s.apikey; if(s.wsid)$('wsid').value=s.wsid; if(s.brief)$('brief').value=s.brief; if(s.gcid)$('gcid').value=s.gcid; if(s.gfolder)$('gfolder').value=s.gfolder; }
  }catch(e){}}
- function save(){try{localStorage.setItem('sidekick',JSON.stringify({names:$('names').value,stories:$('stories').value,context:$('context').value,apikey:$('apikey').value,wsid:$('wsid').value,brief:$('brief').value}))}catch(e){}}
+ function save(){try{localStorage.setItem('sidekick',JSON.stringify({names:$('names').value,stories:$('stories').value,context:$('context').value,apikey:$('apikey').value,wsid:$('wsid').value,brief:$('brief').value,gcid:$('gcid').value,gfolder:$('gfolder').value}))}catch(e){}}
  function storageCheck(){ try{ localStorage.setItem('sk_test','1'); var ok=localStorage.getItem('sk_test')==='1'; localStorage.removeItem('sk_test'); return ok?'ok':'read-back failed'; }catch(e){ return 'blocked ('+e.name+')'; } }
  load();
  $('saveBtn').onclick=function(){
@@ -118,7 +127,7 @@ textarea{min-height:110px}
   b.textContent= ok ? 'Saved ✓' : ('NOT saved - storage '+storageCheck());
   setTimeout(function(){b.textContent='Save settings'},4000);
  };
- ['names','stories','context','apikey','wsid','brief'].forEach(function(id){ var el=$(id); if(el) el.addEventListener('change',save); });
+ ['names','stories','context','apikey','wsid','brief','gcid','gfolder'].forEach(function(id){ var el=$(id); if(el) el.addEventListener('change',save); });
 
  // Claude via Anthropic API (direct from this phone)
  var MODEL='claude-haiku-4-5-20251001';
@@ -148,10 +157,20 @@ textarea{min-height:110px}
   var waited=now-pendingStart, wait=Math.max(0,Math.min(2500, 6000-waited));
   pending=setTimeout(function(){ var r=pendingReason; pending=null; pendingReason=null; fire(r,false); },wait);
  }
+ var lastHeard=0;
+ function similar(a,b){ var A=a.split(/\s+/),B=b.split(/\s+/); var set={}; A.forEach(function(w){set[w]=1}); var c=0; B.forEach(function(w){ if(set[w]) c++; }); return c/Math.max(1,Math.min(A.length,B.length)); }
+ function showWarn(m){ var w=$('warn'); w.textContent=m; w.style.display='block'; if(navigator.vibrate) navigator.vibrate(300); }
+ function hideWarn(){ $('warn').style.display='none'; }
+ function edit1(a,b){ if(Math.abs(a.length-b.length)>1) return false; var i=0,j=0,d=0; while(i<a.length&&j<b.length){ if(a[i]===b[j]){i++;j++;continue;} d++; if(d>1) return false; if(a.length>b.length) i++; else if(b.length>a.length) j++; else {i++;j++;} } return d+(a.length-i)+(b.length-j)<=1; }
  function checkTrigger(text){
   var low=' '+text.toLowerCase().replace(/[^a-z0-9 ]/g,' ')+' ';
   var hit=null;
-  list($('names').value).forEach(function(n){ if(!hit && low.indexOf(' '+n+' ')>-1) hit='name: '+n; });
+  var words=low.trim().split(/\s+/);
+  list($('names').value).forEach(function(n){
+   if(hit) return;
+   if(low.indexOf(' '+n+' ')>-1){ hit='name: '+n; return; }
+   if(n.indexOf(' ')<0 && n.length>=4){ words.forEach(function(w){ if(!hit && w.length>=4 && w!==n && edit1(w,n)) hit='name (close): '+w; }); }
+  });
   if(!hit){ list($('stories').value).forEach(function(n){ var d=n.replace(/\D/g,''); if(d && !hit && low.replace(/ /g,'').indexOf(d)>-1) hit='story: '+d; }); }
   if(!hit){
    var cues=['your thoughts','any update','any updates','what do you think','over to you','anything from you','your side'];
@@ -193,8 +212,11 @@ textarea{min-height:110px}
     var r=ev.results[i];
     if(r.isFinal){ var t=r[0].transcript.trim(); if(t){
       var last=segs.length?segs[segs.length-1]:null;
-      if(last && Date.now()-last.t<15000 && t.toLowerCase().indexOf(last.text.toLowerCase())===0){ last.text=t; last.t=Date.now(); }
-      else if(last && last.text.toLowerCase().indexOf(t.toLowerCase())===0){ /* shorter repeat, skip */ }
+      var tl=t.toLowerCase(), ll=last?last.text.toLowerCase():'';
+      lastHeard=Date.now(); hideWarn();
+      if(last && Date.now()-last.t<20000 && tl.indexOf(ll)===0){ last.text=t; last.t=Date.now(); }
+      else if(last && (ll.indexOf(tl)>-1)){ /* repeat already captured, skip */ }
+      else if(last && Date.now()-last.t<20000 && similar(ll,tl)>=0.6){ if(tl.length>ll.length){ last.text=t; } last.t=Date.now(); }
       else { segs.push({t:Date.now(),text:t}); }
       checkTrigger(t); } }
     else interim+=r[0].transcript;
@@ -214,16 +236,18 @@ textarea{min-height:110px}
  async function keepAwake(){ try{ if('wakeLock' in navigator){ wakeLock=await navigator.wakeLock.request('screen'); } }catch(e){} }
  document.addEventListener('visibilitychange',function(){ if(document.visibilityState==='visible' && running) keepAwake(); });
 
- $('startBtn').onclick=function(){ running=true; setUI(); keepAwake(); startRec(); };
+ $('startBtn').onclick=function(){ lastHeard=Date.now(); hideWarn(); syncBrief(); running=true; setUI(); keepAwake(); startRec(); };
  $('stopBtn').onclick=function(){ running=false; try{rec&&rec.stop()}catch(e){} if(wakeLock){try{wakeLock.release()}catch(e){}} setUI(); };
  $('askBtn').onclick=function(){ fire('manual ask',true); };
 
- $('wrapBtn').onclick=function(){
+ $('wrapBtn').onclick=function(){ syncBrief();
   
   var full=segs.map(function(s){return s.text}).join(' ');
   if(!full){ return; }
   $('wrapBox').open=true; $('wrapOut').textContent='Thinking…';
-  var prompt='From this automatic transcript of a Teams meeting (it has errors), list ONLY what concerns the user named in the context. '+
+  var prompt='From this automatic transcript of a Teams meeting (it has errors and no speaker names), list ONLY what concerns the user named in the brief. '+
+   'RULES: Every item must come from something actually said in the TRANSCRIPT. Use the brief and today notes ONLY to understand names, stories and context, never as a source of items. '+
+   'The transcript has no speaker labels, so if it is unclear who said something or who it is for, write (unclear who) instead of guessing a name. Do not claim something belongs to the user unless the transcript says so. '+
    'Sections: Asked of the user; Decisions affecting their work; Follow-ups they might send. Plain short lines, no filler. If nothing, say Nothing for you.\n\n'+
    'PROJECT BRIEF:\n'+$('brief').value+'\n\nTODAY:\n'+$('context').value+'\n\nTRANSCRIPT:\n'+full.slice(-60000);
   sample(prompt,{max:1200})
@@ -246,6 +270,35 @@ textarea{min-height:110px}
   catch(e){ out.push('getUserMedia: '+e.name+' - '+e.message); }
   $('diag').textContent=out.join('\n')+'\n';
  };
+
+ var gToken=null, gTokenExp=0, gClient=null;
+ function loadGIS(cb){ if(window.google&&google.accounts&&google.accounts.oauth2) return cb(); var sc=document.createElement('script'); sc.src='https://accounts.google.com/gsi/client'; sc.onload=cb; sc.onerror=function(){ $('driveStatus').textContent='Drive brief: could not load Google sign-in'; }; document.head.appendChild(sc); }
+ function connectDrive(then){
+  var cid=$('gcid').value.trim(); if(!cid){ $('driveStatus').textContent='Drive brief: add the Google client ID in Settings first'; return; }
+  loadGIS(function(){
+   gClient=google.accounts.oauth2.initTokenClient({client_id:cid, scope:'https://www.googleapis.com/auth/drive.readonly', callback:function(resp){
+     if(resp&&resp.access_token){ gToken=resp.access_token; gTokenExp=Date.now()+((resp.expires_in||3600)-60)*1000; $('driveStatus').textContent='Drive brief: connected'; if(then) then(); }
+     else { $('driveStatus').textContent='Drive brief: sign-in failed'; }
+   }});
+   gClient.requestAccessToken();
+  });
+ }
+ function gfetch(url){ return fetch(url,{headers:{Authorization:'Bearer '+gToken}}).then(function(r){ if(!r.ok) throw new Error('HTTP '+r.status); return r; }); }
+ function syncBrief(){
+  if(!gToken||Date.now()>gTokenExp){ if(gToken) $('driveStatus').textContent='Drive brief: sign-in expired, tap Connect Drive'; return Promise.resolve(); }
+  var folder=$('gfolder').value.trim();
+  var q=encodeURIComponent("'"+folder+"' in parents and name contains 'sidekick-brief' and trashed=false");
+  return gfetch('https://www.googleapis.com/drive/v3/files?q='+q+'&orderBy=createdTime%20desc&pageSize=1&fields=files(id,name,createdTime)')
+   .then(function(r){return r.json()})
+   .then(function(j){ var f=j.files&&j.files[0]; if(!f) throw new Error('no brief file in folder'); return gfetch('https://www.googleapis.com/drive/v3/files/'+f.id+'?alt=media').then(function(r){return r.text()}).then(function(t){ $('brief').value=t; save(); $('driveStatus').textContent='Drive brief: synced '+new Date().toLocaleTimeString()+' ('+new Date(f.createdTime).toLocaleString()+' version)'; }); })
+   .catch(function(e){ $('driveStatus').textContent='Drive brief: sync failed ('+e.message+'), using last saved copy'; });
+ }
+ $('driveBtn').onclick=function(){ connectDrive(syncBrief); };
+ setInterval(function(){ if(running) syncBrief(); }, 30*60*1000);
+ setInterval(function(){
+  if(running && lastHeard && Date.now()-lastHeard>90000) showWarn('No speech heard for 90 seconds. Check the mic, volume, or tap Stop then Start listening.');
+ },15000);
+ document.addEventListener('visibilitychange',function(){ if(document.visibilityState!=='visible' && running) showWarn('Screen was off or page in background: listening may have stopped. Check the transcript.'); });
  setInterval(setUI,2000);
 })();
 </script>

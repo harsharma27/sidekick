@@ -39,7 +39,7 @@ textarea{min-height:110px}
 </head>
 <body>
 <main>
-<h1>Meeting Sidekick <span style="font-weight:400">v6</span></h1>
+<h1>Meeting Sidekick <span style="font-weight:400">v7.1</span></h1>
 
 <div class="bar">
  <button id="startBtn" class="primary">Start listening</button>
@@ -72,7 +72,10 @@ textarea{min-height:110px}
  <label>Your stories (numbers, comma separated)
   <input id="stories" value="" placeholder="e.g. 40910, 40912">
  </label>
- <label>Context for replies (status, open items, who's waiting on what)
+ <label>Project brief (people, stories, rules - update weekly)
+  <textarea id="brief" style="min-height:160px"></textarea>
+ </label>
+ <label>Today (status, open items, who's waiting on what)
   <textarea id="context"></textarea>
  </label>
  <button id="saveBtn" style="margin-top:8px">Save settings</button>
@@ -103,9 +106,9 @@ textarea{min-height:110px}
  // settings
  function load(){try{
   var s=JSON.parse(localStorage.getItem('sidekick')||'null');
-  if(s){ if(s.names)$('names').value=s.names; if(s.stories)$('stories').value=s.stories; if(s.context)$('context').value=s.context; if(s.apikey)$('apikey').value=s.apikey; if(s.wsid)$('wsid').value=s.wsid; }
+  if(s){ if(s.names)$('names').value=s.names; if(s.stories)$('stories').value=s.stories; if(s.context)$('context').value=s.context; if(s.apikey)$('apikey').value=s.apikey; if(s.wsid)$('wsid').value=s.wsid; if(s.brief)$('brief').value=s.brief; }
  }catch(e){}}
- function save(){try{localStorage.setItem('sidekick',JSON.stringify({names:$('names').value,stories:$('stories').value,context:$('context').value,apikey:$('apikey').value,wsid:$('wsid').value}))}catch(e){}}
+ function save(){try{localStorage.setItem('sidekick',JSON.stringify({names:$('names').value,stories:$('stories').value,context:$('context').value,apikey:$('apikey').value,wsid:$('wsid').value,brief:$('brief').value}))}catch(e){}}
  function storageCheck(){ try{ localStorage.setItem('sk_test','1'); var ok=localStorage.getItem('sk_test')==='1'; localStorage.removeItem('sk_test'); return ok?'ok':'read-back failed'; }catch(e){ return 'blocked ('+e.name+')'; } }
  load();
  $('saveBtn').onclick=function(){
@@ -115,7 +118,7 @@ textarea{min-height:110px}
   b.textContent= ok ? 'Saved ✓' : ('NOT saved - storage '+storageCheck());
   setTimeout(function(){b.textContent='Save settings'},4000);
  };
- ['names','stories','context','apikey','wsid'].forEach(function(id){ var el=$(id); if(el) el.addEventListener('change',save); });
+ ['names','stories','context','apikey','wsid','brief'].forEach(function(id){ var el=$(id); if(el) el.addEventListener('change',save); });
 
  // Claude via Anthropic API (direct from this phone)
  var MODEL='claude-haiku-4-5-20251001';
@@ -137,12 +140,23 @@ textarea{min-height:110px}
  }
 
  var pending=null, pendingReason=null;
- function schedule(reason){ pendingReason=pendingReason||reason; if(pending) clearTimeout(pending); pending=setTimeout(function(){ var r=pendingReason; pending=null; pendingReason=null; fire(r,false); },4000); }
+ var pendingStart=0;
+ function schedule(reason){
+  var now=Date.now();
+  if(!pending){ pendingStart=now; pendingReason=reason; }
+  if(pending) clearTimeout(pending);
+  var waited=now-pendingStart, wait=Math.max(0,Math.min(2500, 6000-waited));
+  pending=setTimeout(function(){ var r=pendingReason; pending=null; pendingReason=null; fire(r,false); },wait);
+ }
  function checkTrigger(text){
   var low=' '+text.toLowerCase().replace(/[^a-z0-9 ]/g,' ')+' ';
   var hit=null;
   list($('names').value).forEach(function(n){ if(!hit && low.indexOf(' '+n+' ')>-1) hit='name: '+n; });
   if(!hit){ list($('stories').value).forEach(function(n){ var d=n.replace(/\D/g,''); if(d && !hit && low.replace(/ /g,'').indexOf(d)>-1) hit='story: '+d; }); }
+  if(!hit){
+   var cues=['your thoughts','any update','any updates','what do you think','over to you','anything from you','your side'];
+   cues.forEach(function(c){ if(!hit && low.indexOf(' '+c+' ')>-1) hit='cue: '+c; });
+  }
   if(hit) schedule(hit);
  }
 
@@ -156,13 +170,13 @@ textarea{min-height:110px}
   if(navigator.vibrate) navigator.vibrate([120,80,120]);
   $('reply').classList.add('hot');
   $('replyText').textContent='Thinking…';
-  $('trigger').textContent='Heard '+reason+' at '+new Date().toLocaleTimeString()+(($('context').value.trim())?'':' (context is EMPTY - add it in Settings)');
+  $('trigger').textContent='Heard '+reason+' at '+new Date().toLocaleTimeString()+(($('context').value.trim()||$('brief').value.trim())?'':' (brief and today are EMPTY - add them in Settings)');
   var prompt='You help the user (named in the context) during a live work call. '+
    'Below is the last two minutes of an automatic transcript (it has errors) and his current context. '+
    'If the user\'s name (or a misheard version of it) appears just before or after a question or request, treat that question as directed at them. If someone is asking the user something or it is their turn, reply with ONE or TWO short spoken sentences they can say: plain, friendly, junior tone, no jargon beyond what the call used, never promise dates or decisions that belong to others. '+
    'This was triggered because the user\'s name or one of their work items was just heard, so ALWAYS give your best one or two sentence suggestion. If the question is unclear in the transcript, suggest a polite short line asking them to repeat it, or a brief status line from the context about the item that was mentioned.\n\n'+
-   'CONTEXT:\n'+$('context').value+'\n\nTRANSCRIPT:\n'+recentText(WINDOW_MS);
-  sample(prompt,{max:200})
+   'PROJECT BRIEF:\n'+$('brief').value+'\n\nTODAY:\n'+$('context').value+'\n\nTRANSCRIPT:\n'+recentText(WINDOW_MS);
+  sample(prompt,{max:250})
    .then(function(r){ $('replyText').textContent=r.text; replies++; $('replyCount').textContent=replies; })
    .catch(function(e){ $('replyText').textContent='No reply ('+(e&&e.code||'error')+'): '+(e&&e.message||'');  })
    .then(function(){ busy=false; setTimeout(function(){$('reply').classList.remove('hot')},4000); });
@@ -211,7 +225,7 @@ textarea{min-height:110px}
   $('wrapBox').open=true; $('wrapOut').textContent='Thinking…';
   var prompt='From this automatic transcript of a Teams meeting (it has errors), list ONLY what concerns the user named in the context. '+
    'Sections: Asked of the user; Decisions affecting their work; Follow-ups they might send. Plain short lines, no filler. If nothing, say Nothing for you.\n\n'+
-   'CONTEXT:\n'+$('context').value+'\n\nTRANSCRIPT:\n'+full.slice(-60000);
+   'PROJECT BRIEF:\n'+$('brief').value+'\n\nTODAY:\n'+$('context').value+'\n\nTRANSCRIPT:\n'+full.slice(-60000);
   sample(prompt,{max:1200})
    .then(function(r){$('wrapOut').textContent=r.text})
    .catch(function(e){$('wrapOut').textContent='Wrap failed ('+(e&&e.code||'error')+'): '+(e&&e.message||'')});

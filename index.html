@@ -39,13 +39,14 @@ textarea{min-height:110px}
 </head>
 <body>
 <main>
-<h1>Meeting Sidekick <span style="font-weight:400">v8</span></h1>
+<h1>Meeting Sidekick <span style="font-weight:400">v9</span></h1>
 
 <div class="bar">
  <button id="startBtn" class="primary">Start listening</button>
  <button id="stopBtn" disabled>Stop</button>
  <button id="askBtn" disabled>Ask now</button>
  <button id="wrapBtn" disabled>Wrap</button>
+ <button id="resetBtn">Reset</button>
  <button id="diagBtn">Mic test</button>
  <button id="driveBtn">Connect Drive</button>
 </div>
@@ -54,6 +55,7 @@ textarea{min-height:110px}
 <div id="warn" style="display:none;background:#b4441c;color:#fff;padding:10px 12px;border-radius:10px;margin-bottom:10px;font-weight:600"></div>
 <div id="driveStatus" style="font-size:13px;color:var(--muted);margin-bottom:8px">Drive brief: not connected</div>
 <div id="status">Mic: <b id="micState" class="off">off</b> · restarts: <b id="restarts">0</b> · replies: <b id="replyCount">0</b></div>
+<div id="heard" style="font-family:'IBM Plex Mono',monospace;font-size:13px;color:var(--muted);margin:-6px 0 12px"></div>
 
 <div id="reply">
  <div class="label">Say this</div>
@@ -93,6 +95,7 @@ textarea{min-height:110px}
 <details>
  <summary>Live transcript (kept in memory, cleared on close)</summary>
  <div id="transcript"></div>
+ <button id="clearTrBtn" style="margin-top:8px">Clear transcript</button>
 </details>
 
 <details id="wrapBox">
@@ -110,7 +113,17 @@ textarea{min-height:110px}
  var sample=null, rec=null, running=false, restarts=0, replies=0;
  var segs=[]; // {t, text}
  var lastTrigger=0, busy=false, wakeLock=null;
+ var hear={audio:0,sound:0,text:0};   // when the recognizer last reported: audio opened, sound heard, any text (interim or final)
+ var epoch=0;                // bumped by Reset/Start/Stop-with-a-request-in-flight: a reply from an older epoch is ignored
+ var inflight=[];            // AbortControllers of API calls in flight
+ var retry=null, retryTimer=null;   // a thin-speech trigger waiting for more speech: {reason, since}
+ var INITIAL_REPLY=$('replyText').textContent, INITIAL_WRAP=$('wrapOut').textContent;
  var COOLDOWN=40000, WINDOW_MS=120000;
+ var MIN_WORDS_AUTO=15;      // an automatic trigger (name, story, cue) needs at least this many words in the last WINDOW_MS
+ var MIN_WORDS_MANUAL=8;     // "Ask now" needs at least this many
+ var THIN_WAIT_MS=60000;     // how long a thin-speech trigger keeps waiting for more speech
+ var REQ_TIMEOUT_MS=25000;   // every API call aborts after this long ...
+ var WRAP_TIMEOUT_MS=60000;  // ... Wrap after this long
 
  // settings
  function load(){try{
@@ -136,9 +149,18 @@ textarea{min-height:110px}
   if(!key) return Promise.reject({code:'no_key',message:'Add your API key in Settings.'});
   var h={'content-type':'application/json','x-api-key':key,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'};
   var ws=$('wsid').value.trim(); if(ws) h['anthropic-workspace-id']=ws;
-  return fetch('https://api.anthropic.com/v1/messages',{method:'POST',headers:h,
-    body:JSON.stringify({model:MODEL,max_tokens:(opts&&opts.max)||300,messages:[{role:'user',content:prompt}]})})
-   .then(function(r){return r.json().then(function(j){ if(!r.ok) throw {code:'http_'+r.status,message:(j.error&&j.error.message)||'API error'}; return {text:(j.content||[]).filter(function(c){return c.type==='text'}).map(function(c){return c.text}).join('\n')}; })});
+  var ms=(opts&&opts.timeout)||REQ_TIMEOUT_MS, ctl=(typeof AbortController!=='undefined')?new AbortController():null, timer=null;
+  if(ctl) inflight.push(ctl);
+  function done(){ clearTimeout(timer); var i=inflight.indexOf(ctl); if(i>-1) inflight.splice(i,1); }
+  var p=new Promise(function(resolve,reject){
+   // the timer rejects by itself, so a request that never answers (or ignores the abort) can not leave the app waiting
+   timer=setTimeout(function(){ if(ctl) try{ctl.abort()}catch(e){} reject({code:'timeout',message:'The request timed out after '+Math.round(ms/1000)+' seconds. Check the connection and try again.'}); },ms);
+   fetch('https://api.anthropic.com/v1/messages',{method:'POST',headers:h,signal:ctl?ctl.signal:undefined,
+     body:JSON.stringify({model:MODEL,max_tokens:(opts&&opts.max)||300,messages:[{role:'user',content:prompt}]})})
+    .then(function(r){return r.json().then(function(j){ if(!r.ok) throw {code:'http_'+r.status,message:(j.error&&j.error.message)||'API error'}; return {text:(j.content||[]).filter(function(c){return c.type==='text'}).map(function(c){return c.text}).join('\n')}; })})
+    .then(resolve,function(e){ reject(e&&e.name==='AbortError'?{code:'aborted',message:'The request was cancelled.'}:(e&&e.code?e:{code:'network',message:(e&&e.message)||'Could not reach the API.'})); });
+  });
+  return p.then(function(v){done();return v;},function(e){done();throw e;});
  };
  function list(v){return v.split(',').map(function(x){return x.trim().toLowerCase()}).filter(Boolean)}
  function recentText(ms){var now=Date.now();return segs.filter(function(s){return now-s.t<=ms}).map(function(s){return s.text}).join(' ')}
@@ -179,13 +201,42 @@ textarea{min-height:110px}
   if(hit) schedule(hit);
  }
 
+ function wordCount(ms){ return recentText(ms).split(/\s+/).filter(Boolean).length; }
+ function plural(n){ return n+' word'+(n===1?'':'s'); }
+ function clearRetry(){ clearTimeout(retryTimer); retryTimer=null; retry=null; }
+ function showThin(){ $('replyText').textContent='Heard '+retry.reason+', but only '+plural(wordCount(WINDOW_MS))+' so far. Waiting for more speech.'; }
+ function startRetry(reason){
+  var since=(retry&&retry.reason===reason)?retry.since:Date.now();   // a repeat of the same trigger does not extend the wait
+  clearTimeout(retryTimer); retry={reason:reason,since:since}; showThin();
+  retryTimer=setTimeout(expireRetry,Math.max(0,THIN_WAIT_MS-(Date.now()-since)));
+ }
+ function expireRetry(){
+  if(!retry) return; var r=retry.reason, n=wordCount(WINDOW_MS); clearRetry();
+  $('replyText').textContent='Heard '+r+', but only '+plural(n)+' after '+Math.round(THIN_WAIT_MS/1000)+' seconds - not enough to answer. Tap Ask now if you want a reply.';
+ }
+ function recheckRetry(){
+  if(!retry) return;
+  if(Date.now()-retry.since>=THIN_WAIT_MS) return expireRetry();
+  if(wordCount(WINDOW_MS)>=MIN_WORDS_AUTO){ var r=retry.reason; clearRetry(); fire(r,false); } else showThin();
+ }
+ // cancel whatever is waiting or stuck: the trigger timer, a thin-speech wait, and a request in flight (its reply will be ignored)
+ function abortInflight(){ inflight.slice().forEach(function(c){ try{c.abort()}catch(e){} }); inflight=[]; }
+ function clearStuck(){
+  clearTimeout(pending); pending=null; pendingReason=null; pendingStart=0; clearRetry();
+  if(busy){ epoch++; abortInflight(); busy=false; $('reply').classList.remove('hot'); $('replyText').textContent='Cancelled. Tap Ask now to try again.'; }
+ }
+
  function fire(reason,manual){
   var now=Date.now();
   if(busy) return;
   if(!manual && now-lastTrigger<COOLDOWN) return;
+  var n=wordCount(WINDOW_MS);
+  if(manual && n<MIN_WORDS_MANUAL){ $('replyText').textContent='Not enough speech yet ('+plural(n)+' in the last 2 minutes, need at least '+MIN_WORDS_MANUAL+'). Keep listening, then tap Ask now again.'; return; }
+  if(!manual && n<MIN_WORDS_AUTO){ startRetry(reason); return; }
+  clearRetry();
   lastTrigger=now;
   
-  busy=true;
+  busy=true; var my=epoch;
   if(navigator.vibrate) navigator.vibrate([120,80,120]);
   $('reply').classList.add('hot');
   $('replyText').textContent='Thinking…';
@@ -193,20 +244,25 @@ textarea{min-height:110px}
   var prompt='You help the user (named in the context) during a live work call. '+
    'Below is the last two minutes of an automatic transcript (it has errors) and his current context. '+
    'If the user\'s name (or a misheard version of it) appears just before or after a question or request, treat that question as directed at them. If someone is asking the user something or it is their turn, reply with ONE or TWO short spoken sentences they can say: plain, friendly, junior tone, no jargon beyond what the call used, never promise dates or decisions that belong to others. '+
-   'This was triggered because the user\'s name or one of their work items was just heard, so ALWAYS give your best one or two sentence suggestion. If the question is unclear in the transcript, suggest a polite short line asking them to repeat it, or a brief status line from the context about the item that was mentioned.\n\n'+
+   'This was triggered because the user\'s name, one of their work items or a cue phrase was just heard, which does not mean anyone asked them anything. Only answer if the transcript contains a real question or request for the user (a direct question, a request for an update, or their name followed by a request). If there is none, reply with exactly: Nothing for you. Do not invent a question, do not summarise the call, and do not give a status line unless asked for one. If a question is directed at them but the transcript is garbled, reply with one short line asking them to repeat it.\n\n'+
    'PROJECT BRIEF:\n'+$('brief').value+'\n\nTODAY:\n'+$('context').value+'\n\nTRANSCRIPT:\n'+recentText(WINDOW_MS);
   sample(prompt,{max:250})
-   .then(function(r){ $('replyText').textContent=r.text; replies++; $('replyCount').textContent=replies; })
-   .catch(function(e){ $('replyText').textContent='No reply ('+(e&&e.code||'error')+'): '+(e&&e.message||'');  })
-   .then(function(){ busy=false; setTimeout(function(){$('reply').classList.remove('hot')},4000); });
+   .then(function(r){ if(my!==epoch) return; $('replyText').textContent=r.text; replies++; $('replyCount').textContent=replies; })
+   .catch(function(e){ if(my!==epoch) return; $('replyText').textContent='No reply ('+(e&&e.code||'error')+'): '+(e&&e.message||'');  })
+   .then(function(){ if(my!==epoch) return; busy=false; setTimeout(function(){$('reply').classList.remove('hot')},4000); });
  }
 
  // speech
  var SR=window.SpeechRecognition||window.webkitSpeechRecognition;
+ function detachRec(){ var o=rec; rec=null; if(!o) return; o.onresult=o.onerror=o.onend=o.onaudiostart=o.onsoundstart=o.onspeechstart=null; try{o.abort?o.abort():o.stop()}catch(e){} }
  function startRec(){
+  detachRec();
   if(!SR){ $('replyText').textContent='This browser has no speech recognition. Use Chrome on the Pixel.'; return; }
-  rec=new SR(); rec.continuous=true; rec.interimResults=true; rec.lang='en-US';
-  rec.onresult=function(ev){
+  var me=rec=new SR(); rec.continuous=true; rec.interimResults=true; rec.lang='en-US';
+  rec.onaudiostart=function(){ if(rec!==me) return; hear.audio=Date.now(); renderHeard(); };
+  rec.onsoundstart=function(){ if(rec!==me) return; hear.sound=Date.now(); renderHeard(); };
+  rec.onspeechstart=function(){ if(rec!==me) return; hear.sound=Date.now(); renderHeard(); };
+  rec.onresult=function(ev){ if(rec!==me) return; hear.text=Date.now();
    var interim='';
    for(var i=ev.resultIndex;i<ev.results.length;i++){
     var r=ev.results[i];
@@ -223,21 +279,29 @@ textarea{min-height:110px}
    }
    var cutoff=Date.now()-3*60*60*1000; while(segs.length && segs[0].t<cutoff) segs.shift();
    if(pending) schedule(pendingReason);
+   recheckRetry();
    renderTranscript(interim);
+   renderHeard();
   };
-  rec.onerror=function(ev){ $('diag').textContent+='speech error: '+ev.error+(ev.message?(' ('+ev.message+')'):'')+'\n'; if(ev.error==='not-allowed'||ev.error==='service-not-allowed'||ev.error==='audio-capture'){ running=false; setUI(); $('replyText').textContent='Speech stopped: '+ev.error+'. See the diagnostic lines above.'; } };
-  rec.onend=function(){ if(running){ restarts++; $('restarts').textContent=restarts; try{rec.start()}catch(e){ setTimeout(function(){ if(running) try{rec.start()}catch(e2){} },400);} } };
+  rec.onerror=function(ev){ if(rec!==me) return; $('diag').textContent+='speech error: '+ev.error+(ev.message?(' ('+ev.message+')'):'')+'\n'; if(ev.error==='not-allowed'||ev.error==='service-not-allowed'||ev.error==='audio-capture'){ running=false; setUI(); $('replyText').textContent='Speech stopped: '+ev.error+'. See the diagnostic lines above.'; } };
+  rec.onend=function(){ if(rec!==me) return; if(running){ restarts++; $('restarts').textContent=restarts; try{rec.start()}catch(e){ setTimeout(function(){ if(running&&rec===me) try{rec.start()}catch(e2){} },400);} } };
   try{ rec.start(); }catch(e){}
  }
+ function renderHeard(){
+  var el=$('heard'); if(!running){ el.textContent=''; return; }
+  function ago(t){ return t?Math.round((Date.now()-t)/1000)+'s ago':'never'; }
+  el.textContent='Heard: mic audio '+(hear.audio?'open':'not open yet')+' · sound '+ago(hear.sound)+' · text '+ago(hear.text);
+ }
  function setUI(){
+  renderHeard();
   $('startBtn').disabled=running; $('stopBtn').disabled=!running; $('askBtn').disabled=!running; $('wrapBtn').disabled=segs.length===0;
   $('micState').textContent=running?'listening':'off'; $('micState').className=running?'live':'off';
  }
  async function keepAwake(){ try{ if('wakeLock' in navigator){ wakeLock=await navigator.wakeLock.request('screen'); } }catch(e){} }
  document.addEventListener('visibilitychange',function(){ if(document.visibilityState==='visible' && running) keepAwake(); });
 
- $('startBtn').onclick=function(){ lastHeard=Date.now(); hideWarn(); syncBrief(); running=true; setUI(); keepAwake(); startRec(); };
- $('stopBtn').onclick=function(){ running=false; try{rec&&rec.stop()}catch(e){} if(wakeLock){try{wakeLock.release()}catch(e){}} setUI(); };
+ $('startBtn').onclick=function(){ clearStuck(); lastHeard=Date.now(); hideWarn(); syncBrief(); running=true; setUI(); keepAwake(); startRec(); };
+ $('stopBtn').onclick=function(){ running=false; clearStuck(); try{rec&&rec.stop()}catch(e){} if(wakeLock){try{wakeLock.release()}catch(e){}} setUI(); };
  $('askBtn').onclick=function(){ fire('manual ask',true); };
 
  $('wrapBtn').onclick=function(){ syncBrief();
@@ -250,10 +314,22 @@ textarea{min-height:110px}
    'The transcript has no speaker labels, so if it is unclear who said something or who it is for, write (unclear who) instead of guessing a name. Do not claim something belongs to the user unless the transcript says so. '+
    'Sections: Asked of the user; Decisions affecting their work; Follow-ups they might send. Plain short lines, no filler. If nothing, say Nothing for you.\n\n'+
    'PROJECT BRIEF:\n'+$('brief').value+'\n\nTODAY:\n'+$('context').value+'\n\nTRANSCRIPT:\n'+full.slice(-60000);
-  sample(prompt,{max:1200})
-   .then(function(r){$('wrapOut').textContent=r.text})
-   .catch(function(e){$('wrapOut').textContent='Wrap failed ('+(e&&e.code||'error')+'): '+(e&&e.message||'')});
+  var myw=epoch;
+  sample(prompt,{max:1200,timeout:WRAP_TIMEOUT_MS})
+   .then(function(r){ if(myw!==epoch) return; $('wrapOut').textContent=r.text})
+   .catch(function(e){ if(myw!==epoch) return; $('wrapOut').textContent='Wrap failed ('+(e&&e.code||'error')+'): '+(e&&e.message||'')});
  };
+ $('resetBtn').onclick=function(){
+  epoch++; abortInflight();                       // any reply still in flight is now stale and will be ignored
+  clearTimeout(pending); pending=null; pendingReason=null; pendingStart=0; clearRetry();
+  hear.audio=hear.sound=hear.text=0; segs.length=0; busy=false; lastTrigger=0; replies=0; lastHeard=running?Date.now():0;
+  $('reply').classList.remove('hot'); $('replyText').textContent=INITIAL_REPLY; $('trigger').textContent='';
+  $('replyCount').textContent=0; $('wrapOut').textContent=INITIAL_WRAP; $('diag').textContent=''; hideWarn();
+  renderTranscript('');
+  if(running) startRec();                         // fresh recognizer; startRec detaches the old one first
+  setUI();
+ };
+ $('clearTrBtn').onclick=function(){ segs.length=0; clearRetry(); renderTranscript(''); setUI(); };
  $('copyBtn').onclick=function(){ try{navigator.clipboard.writeText($('wrapOut').textContent)}catch(e){} };
 
  $('diagBtn').onclick=async function(){

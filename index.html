@@ -47,7 +47,7 @@ textarea{min-height:110px}
 </head>
 <body>
 <main>
-<h1>Meeting Sidekick <span style="font-weight:400">v10</span></h1>
+<h1>Meeting Sidekick <span style="font-weight:400">v11</span></h1>
 
 <div class="bar">
  <button id="startBtn" class="primary">Start listening</button>
@@ -145,7 +145,7 @@ textarea{min-height:110px}
  var THIN_WAIT_MS=60000;
  var REQ_TIMEOUT_MS=25000, WRAP_TIMEOUT_MS=60000;
  var NOTES_EVERY_MS=20000;   // notes refresh at most this often, and only when there is new speech
- var briefAt=0;              // when the brief was last synced from Drive (or typed in)
+ var briefAt=0, errLog=[], errStreak=0, retryTimerRec=null;              // when the brief was last synced from Drive (or typed in)
  var notesOn=true, notesBusy=false, notesTry=0, notesAt=0;
 
  // ---------- settings ----------
@@ -261,7 +261,8 @@ textarea{min-height:110px}
 
  var COMMON=
   'You help the user (named in the context) during a live work call. '+
-  'Below are the last two minutes of an automatic transcript (it has errors, no speaker names, and the newest words are last) and his current context. ';
+  'Below are the last two minutes of an automatic transcript (it has errors, no speaker names, and the newest words are last) and his current context. '+
+  'The TRANSCRIPT is newer than the PROJECT BRIEF: when they disagree about timing, owners or decisions, the transcript is right and the brief is out of date. ';
 
  // mode: 'trigger' (name/story/cue/Ask now) or 'speak' (I want to speak)
  function fire(reason,manual,force,mode){
@@ -291,8 +292,9 @@ textarea{min-height:110px}
   if(mode==='speak'){
    prompt=COMMON+
     'The user now wants to speak. Give ONE sentence (at most 25 words) he can say right now that fits what is being discussed at the end of the transcript. '+
-    'If one of his items in the brief or today notes touches the topic, give his status on it or his one question. If none does, give a short, polite contribution such as one clarifying question about the topic. '+
-    'Plain, friendly, junior tone. Never invent facts, dates or decisions that are not in the brief or today notes, and never promise anything that belongs to others. Output only the sentence.\n\n';
+    'Choose in this order: (1) if a decision, order, date or owner was just stated, give a read-back such as "Just so I have it right: ..." using the speaker\'s own words, which lets the user confirm without inventing anything; (2) else if one of his items in the brief or today notes touches the topic, give his status on it or his one open question; (3) else a short polite contribution. '+
+    'NEVER ask a question the transcript has already answered, and never ask a question just to fill the space. '+
+    'Plain, friendly, junior tone. Never invent facts, dates or decisions that are not in the transcript, the brief or the today notes, and never promise anything that belongs to others. Output only the sentence.\n\n';
   } else {
    prompt=COMMON+
     'If the user\'s name (or a misheard version of it) appears just before or after a question or request, treat that question as directed at them. If someone is asking the user something or it is their turn, reply with ONE or TWO short spoken sentences they can say: plain, friendly, junior tone, no jargon beyond what the call used, never promise dates or decisions that belong to others. '+
@@ -331,7 +333,8 @@ textarea{min-height:110px}
    'TOPIC: <3 to 6 words naming what is being discussed right now>\n'+
    '- up to 3 lines, each at most 20 words, each something the user could say or ask on this topic that comes from the PROJECT BRIEF or TODAY notes (his status, his open ask, who owes what, a date already in the notes).\n'+
    'If it sounds like someone is asking him something, make the first line start with ASKED: and give a one-line answer he can say.\n'+
-   'Never invent facts or dates. If nothing in the brief or today notes touches the topic, output the TOPIC line and then the single line: - Nothing of yours on this topic\n\n'+
+   'If a decision, order, date or owner was just stated, make one line a read-back he can confirm, starting "Confirm:". '+
+   'Every line must be concrete (a story number, a name, a date or a decision). Never write filler such as "let me know if anything else comes up". Never invent facts or dates. If the transcript and the brief disagree, use the transcript. If nothing in the brief or today notes touches the topic, output the TOPIC line and then the single line: - Nothing of yours on this topic\n\n'+
    'PROJECT BRIEF:\n'+$('brief').value+'\n\nTODAY:\n'+$('context').value+'\n\nTRANSCRIPT:\n'+recentText(WINDOW_MS);
   sample(prompt,{max:320})
    .then(function(r){ if(my!==epoch) return; renderNotes(r.text); notesAt=Date.now(); })
@@ -357,7 +360,7 @@ textarea{min-height:110px}
   rec.onaudiostart=function(){ if(rec!==me) return; hear.audio=Date.now(); renderHeard(); };
   rec.onsoundstart=function(){ if(rec!==me) return; hear.sound=Date.now(); renderHeard(); };
   rec.onspeechstart=function(){ if(rec!==me) return; hear.sound=Date.now(); renderHeard(); };
-  rec.onresult=function(ev){ if(rec!==me) return; hear.text=Date.now();
+  rec.onresult=function(ev){ if(rec!==me) return; hear.text=Date.now(); errStreak=0;
    var interim='';
    for(var i=ev.resultIndex;i<ev.results.length;i++){
     var r=ev.results[i];
@@ -380,7 +383,20 @@ textarea{min-height:110px}
    renderTranscript(interim);
    renderHeard();
   };
-  rec.onerror=function(ev){ if(rec!==me) return; $('diag').textContent+='speech error: '+ev.error+(ev.message?(' ('+ev.message+')'):'')+'\n'; if(ev.error==='not-allowed'||ev.error==='service-not-allowed'||ev.error==='audio-capture'){ running=false; setUI(); $('replyText').textContent='Speech stopped: '+ev.error+'. See the diagnostic lines above.'; } };
+  rec.onerror=function(ev){ if(rec!==me) return;
+   var er=ev.error;
+   if(er==='aborted') return;                                            // we or Chrome ended it on purpose: onend restarts it
+   errLog.push(new Date().toLocaleTimeString()+' '+er); if(errLog.length>5) errLog.shift();
+   $('diag').textContent='speech errors (last 5): '+errLog.join(' | ')+'\n';
+   if(er==='no-speech') return;                                          // silence: onend restarts it
+   if(er==='network'||er==='not-allowed'||er==='service-not-allowed'||er==='audio-capture'){
+    // Chrome raises these for a moment when the connection drops, the screen locks or another app takes the mic. If it worked before, retry instead of giving up.
+    var worked=hear.text>0;
+    errStreak++;
+    if(worked && errStreak<=8){ showWarn('Speech hiccup ('+er+'), reconnecting...'); clearTimeout(retryTimerRec); retryTimerRec=setTimeout(function(){ if(running){ hideWarn(); startRec(); } }, Math.min(1000*errStreak,6000)); return; }
+    running=false; setUI(); $('replyText').textContent='Speech stopped: '+er+'. Tap Start listening again. Check mic permission and the connection.';
+   }
+  };
   // Chrome ends recognition after every pause; restarting at once is normal (hundreds per hour). A sentence cut off by the restart is kept as text.
   rec.onend=function(){ if(rec!==me) return;
    if(interimText){ var tt=interimText; interimText=''; var l2=segs.length?segs[segs.length-1]:null; if(!(l2 && l2.text.toLowerCase().indexOf(tt.toLowerCase())>-1)) segs.push({t:Date.now(),text:tt}); }
@@ -407,7 +423,7 @@ textarea{min-height:110px}
   // one tap does everything: renew the Drive sign-in (no popup if already approved) and refresh the brief
   if(driveLive()) syncBrief(); else if($('gcid').value.trim()) connectDrive(syncBrief,true);
  };
- $('stopBtn').onclick=function(){ running=false; clearStuck(); interimText=''; try{rec&&rec.stop()}catch(e){} if(wakeLock){try{wakeLock.release()}catch(e){}} setUI(); };
+ $('stopBtn').onclick=function(){ running=false; clearTimeout(retryTimerRec); clearStuck(); interimText=''; try{rec&&rec.stop()}catch(e){} if(wakeLock){try{wakeLock.release()}catch(e){}} setUI(); };
  $('askBtn').onclick=function(){ fire('manual ask',true); };
  $('speakBtn').onclick=function(){ fire('speak',true,true,'speak'); };
 
@@ -416,7 +432,7 @@ textarea{min-height:110px}
   if(!full){ return; }
   $('wrapBox').open=true; $('wrapOut').textContent='Thinking…';
   var prompt='From this automatic transcript of a Teams meeting (it has errors and no speaker names), list ONLY what concerns the user named in the brief. '+
-   'RULES: Every item must come from something actually said in the TRANSCRIPT. Use the brief and today notes ONLY to understand names, stories and context, never as a source of items. '+
+   'RULES: Every item must come from something actually said in the TRANSCRIPT. Use the brief and today notes ONLY to understand names, stories and context, never as a source of items: if a sentence, commitment or follow-up appears in the brief but is not repeated in the transcript, leave it out. If the brief and the transcript disagree, report what the transcript says. '+
    'The transcript has no speaker labels. The phone sits with the user, so first-person promises in it ("leave it to me", "let me get back to", "I will", "I can take that") are probably the user\'s own: list them under Commitments the user made and add (verify speaker). Otherwise, if it is unclear who said something or who it is for, write (unclear who) instead of guessing a name. Do not claim something belongs to the user unless the transcript says so. '+
    'Keep timing exactly as said (this sprint, next sprint, tomorrow, a date) and keep story numbers and names exactly as said; never merge two different timings into one line. '+
    'Sections: Asked of the user; Commitments the user made; Decisions affecting their work; Follow-ups they might send (a follow-up for each commitment, naming who it goes to). Plain short lines, no filler. If a section has nothing, write Nothing for you under it.\n\n'+

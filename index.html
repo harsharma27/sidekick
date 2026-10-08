@@ -23,10 +23,18 @@ button:disabled{opacity:.45}
 #status{font-family:"IBM Plex Mono",ui-monospace,monospace;font-size:13px;color:var(--muted);margin-bottom:12px}
 #status b{color:var(--ink)}
 .live{color:var(--ok)!important}.off{color:var(--warn)!important}
-#reply{background:var(--panel);border:2px solid var(--line);border-radius:14px;padding:18px;min-height:120px;margin-bottom:12px}
+#reply{background:var(--panel);border:2px solid var(--line);border-radius:14px;padding:14px 16px;min-height:90px;margin-bottom:12px}
 #reply .label{font-size:12px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);margin-bottom:8px}
 #reply .text{font-size:26px;line-height:1.3;font-weight:600}
-#reply.hot{border-color:var(--accent)}
+#reply.hot{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent)}
+#reply .head{display:flex;justify-content:space-between;align-items:center}
+#dismissBtn{padding:4px 10px;font-size:13px}
+#notes{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:12px 16px;margin-bottom:12px}
+#notes .label{font-size:12px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);display:flex;justify-content:space-between}
+#notesTopic{font-weight:600;font-size:17px;margin:6px 0 4px}
+#notesList{margin:0;padding-left:20px;font-size:19px;line-height:1.35}
+#notesList li{margin-bottom:6px}
+#notesList li.asked{color:var(--accent);font-weight:600}
 #trigger{font-size:13px;color:var(--muted);margin-top:8px}
 details{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-bottom:10px}
 summary{cursor:pointer;font-weight:600}
@@ -39,12 +47,14 @@ textarea{min-height:110px}
 </head>
 <body>
 <main>
-<h1>Meeting Sidekick <span style="font-weight:400">v9</span></h1>
+<h1>Meeting Sidekick <span style="font-weight:400">v10</span></h1>
 
 <div class="bar">
  <button id="startBtn" class="primary">Start listening</button>
  <button id="stopBtn" disabled>Stop</button>
+ <button id="speakBtn" class="primary" disabled>I want to speak</button>
  <button id="askBtn" disabled>Ask now</button>
+ <button id="notesBtn">Notes: on</button>
  <button id="wrapBtn" disabled>Wrap</button>
  <button id="resetBtn">Reset</button>
  <button id="diagBtn">Mic test</button>
@@ -53,14 +63,20 @@ textarea{min-height:110px}
 
 <div id="diag" style="font-family:'IBM Plex Mono',monospace;font-size:13px;margin-bottom:10px;white-space:pre-wrap"></div>
 <div id="warn" style="display:none;background:#b4441c;color:#fff;padding:10px 12px;border-radius:10px;margin-bottom:10px;font-weight:600"></div>
-<div id="driveStatus" style="font-size:13px;color:var(--muted);margin-bottom:8px">Drive brief: not connected</div>
+<div id="driveStatus" style="font-size:13px;color:var(--muted);margin-bottom:8px">Brief: not connected</div>
 <div id="status">Mic: <b id="micState" class="off">off</b> · restarts: <b id="restarts">0</b> · replies: <b id="replyCount">0</b></div>
 <div id="heard" style="font-family:'IBM Plex Mono',monospace;font-size:13px;color:var(--muted);margin:-6px 0 12px"></div>
 
 <div id="reply">
- <div class="label">Say this</div>
- <div class="text" id="replyText">Waiting. A reply appears here when your name, one of your stories, or a question to you comes up.</div>
+ <div class="head"><div class="label">Say this</div><button id="dismissBtn">Dismiss</button></div>
+ <div class="text" id="replyText">Waiting. A reply appears here when your name, one of your stories, or a question to you comes up, or when you tap I want to speak.</div>
  <div id="trigger"></div>
+</div>
+
+<div id="notes">
+ <div class="label"><span>Notes for you</span><span id="notesAge"></span></div>
+ <div id="notesTopic">Start listening and notes appear here.</div>
+ <ul id="notesList"></ul>
 </div>
 
 <details>
@@ -111,28 +127,36 @@ textarea{min-height:110px}
 (function(){
  var $=function(id){return document.getElementById(id)};
  var sample=null, rec=null, running=false, restarts=0, replies=0;
- var segs=[]; // {t, text}
- var lastTrigger=0, busy=false, wakeLock=null;
- var hear={audio:0,sound:0,text:0};   // when the recognizer last reported: audio opened, sound heard, any text (interim or final)
- var epoch=0;                // bumped by Reset/Start/Stop-with-a-request-in-flight: a reply from an older epoch is ignored
- var inflight=[];            // AbortControllers of API calls in flight
- var retry=null, retryTimer=null;   // a thin-speech trigger waiting for more speech: {reason, since}
+ var segs=[];            // {t, text} finished sentences
+ var interimText='';     // the sentence still being recognised, so a name is caught before it is "final"
+ var lastName=0, lastCue=0, busy=false, wakeLock=null, queued=null;
+ var hear={audio:0,sound:0,text:0};
+ var epoch=0;            // bumped by Reset/Start/Stop: a reply from an older epoch is ignored
+ var inflight=[];
+ var retry=null, retryTimer=null;
  var INITIAL_REPLY=$('replyText').textContent, INITIAL_WRAP=$('wrapOut').textContent;
- var COOLDOWN=40000, WINDOW_MS=120000;
- var MIN_WORDS_AUTO=15;      // an automatic trigger (name, story, cue) needs at least this many words in the last WINDOW_MS
- var MIN_WORDS_MANUAL=8;     // "Ask now" needs at least this many
- var THIN_WAIT_MS=60000;     // how long a thin-speech trigger keeps waiting for more speech
- var REQ_TIMEOUT_MS=25000;   // every API call aborts after this long ...
- var WRAP_TIMEOUT_MS=60000;  // ... Wrap after this long
+ var COOLDOWN=40000;         // repeat of a cue phrase ("any update"): wait this long
+ var NAME_COOLDOWN=12000;    // repeat of your name or a story number: wait this long
+ var WINDOW_MS=120000;
+ var MIN_WORDS_AUTO=15;      // a cue phrase needs this many words in the last WINDOW_MS
+ var MIN_WORDS_NAME=6;       // your name or a story number needs only this many
+ var MIN_WORDS_MANUAL=8;     // "Ask now"
+ var MIN_WORDS_SPEAK=3;      // "I want to speak"
+ var THIN_WAIT_MS=60000;
+ var REQ_TIMEOUT_MS=25000, WRAP_TIMEOUT_MS=60000;
+ var NOTES_EVERY_MS=20000;   // notes refresh at most this often, and only when there is new speech
+ var briefAt=0;              // when the brief was last synced from Drive (or typed in)
+ var notesOn=true, notesBusy=false, notesTry=0, notesAt=0;
 
- // settings
+ // ---------- settings ----------
  function load(){try{
   var s=JSON.parse(localStorage.getItem('sidekick')||'null');
-  if(s){ if(s.names)$('names').value=s.names; if(s.stories)$('stories').value=s.stories; if(s.context)$('context').value=s.context; if(s.apikey)$('apikey').value=s.apikey; if(s.wsid)$('wsid').value=s.wsid; if(s.brief)$('brief').value=s.brief; if(s.gcid)$('gcid').value=s.gcid; if(s.gfolder)$('gfolder').value=s.gfolder; }
+  if(s){ if(s.names)$('names').value=s.names; if(s.stories)$('stories').value=s.stories; if(s.context)$('context').value=s.context; if(s.apikey)$('apikey').value=s.apikey; if(s.wsid)$('wsid').value=s.wsid; if(s.brief)$('brief').value=s.brief; if(s.gcid)$('gcid').value=s.gcid; if(s.gfolder)$('gfolder').value=s.gfolder; if(s.briefAt)briefAt=s.briefAt; if(s.notesOn===false){ notesOn=false; } }
  }catch(e){}}
- function save(){try{localStorage.setItem('sidekick',JSON.stringify({names:$('names').value,stories:$('stories').value,context:$('context').value,apikey:$('apikey').value,wsid:$('wsid').value,brief:$('brief').value,gcid:$('gcid').value,gfolder:$('gfolder').value}))}catch(e){}}
+ function save(){try{localStorage.setItem('sidekick',JSON.stringify({names:$('names').value,stories:$('stories').value,context:$('context').value,apikey:$('apikey').value,wsid:$('wsid').value,brief:$('brief').value,gcid:$('gcid').value,gfolder:$('gfolder').value,briefAt:briefAt,notesOn:notesOn}))}catch(e){}}
  function storageCheck(){ try{ localStorage.setItem('sk_test','1'); var ok=localStorage.getItem('sk_test')==='1'; localStorage.removeItem('sk_test'); return ok?'ok':'read-back failed'; }catch(e){ return 'blocked ('+e.name+')'; } }
  load();
+ $('notesBtn').textContent=notesOn?'Notes: on':'Notes: off';
  $('saveBtn').onclick=function(){
   var b=this; save();
   var back=null; try{ back=JSON.parse(localStorage.getItem('sidekick')||'null'); }catch(e){}
@@ -140,9 +164,9 @@ textarea{min-height:110px}
   b.textContent= ok ? 'Saved ✓' : ('NOT saved - storage '+storageCheck());
   setTimeout(function(){b.textContent='Save settings'},4000);
  };
- ['names','stories','context','apikey','wsid','brief','gcid','gfolder'].forEach(function(id){ var el=$(id); if(el) el.addEventListener('change',save); });
+ ['names','stories','context','apikey','wsid','brief','gcid','gfolder'].forEach(function(id){ var el=$(id); if(el) el.addEventListener('change',function(){ if(id==='brief'||id==='context'){ if(!gToken) briefAt=briefAt||Date.now(); } save(); }); });
 
- // Claude via Anthropic API (direct from this phone)
+ // ---------- Claude via Anthropic API (direct from this phone) ----------
  var MODEL='claude-haiku-4-5-20251001';
  sample=function(prompt,opts){
   var key=$('apikey').value.trim();
@@ -153,7 +177,6 @@ textarea{min-height:110px}
   if(ctl) inflight.push(ctl);
   function done(){ clearTimeout(timer); var i=inflight.indexOf(ctl); if(i>-1) inflight.splice(i,1); }
   var p=new Promise(function(resolve,reject){
-   // the timer rejects by itself, so a request that never answers (or ignores the abort) can not leave the app waiting
    timer=setTimeout(function(){ if(ctl) try{ctl.abort()}catch(e){} reject({code:'timeout',message:'The request timed out after '+Math.round(ms/1000)+' seconds. Check the connection and try again.'}); },ms);
    fetch('https://api.anthropic.com/v1/messages',{method:'POST',headers:h,signal:ctl?ctl.signal:undefined,
      body:JSON.stringify({model:MODEL,max_tokens:(opts&&opts.max)||300,messages:[{role:'user',content:prompt}]})})
@@ -163,20 +186,22 @@ textarea{min-height:110px}
   return p.then(function(v){done();return v;},function(e){done();throw e;});
  };
  function list(v){return v.split(',').map(function(x){return x.trim().toLowerCase()}).filter(Boolean)}
- function recentText(ms){var now=Date.now();return segs.filter(function(s){return now-s.t<=ms}).map(function(s){return s.text}).join(' ')}
+ function recentText(ms){var now=Date.now();var t=segs.filter(function(s){return now-s.t<=ms}).map(function(s){return s.text}).join(' ');if(interimText) t+=' '+interimText;return t.trim()}
  function renderTranscript(interim){
   var t=segs.slice(-40).map(function(s){return s.text}).join('\n');
   $('transcript').textContent=t+(interim?'\n… '+interim:'');
   $('transcript').scrollTop=$('transcript').scrollHeight;
  }
+ function ago(t){ if(!t) return 'never'; var s=Math.round((Date.now()-t)/1000); return s<90?s+'s ago':Math.round(s/60)+' min ago'; }
+ function clock(t){ return new Date(t).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}); }
 
- var pending=null, pendingReason=null;
- var pendingStart=0;
+ // ---------- triggers: your name, your stories, cue phrases ----------
+ var pending=null, pendingReason=null, pendingStart=0;
  function schedule(reason){
   var now=Date.now();
   if(!pending){ pendingStart=now; pendingReason=reason; }
   if(pending) clearTimeout(pending);
-  var waited=now-pendingStart, wait=Math.max(0,Math.min(2500, 6000-waited));
+  var waited=now-pendingStart, wait=Math.max(0,Math.min(2500, 6000-waited));   // wait for the end of the question, at most 6 s
   pending=setTimeout(function(){ var r=pendingReason; pending=null; pendingReason=null; fire(r,false); },wait);
  }
  var lastHeard=0;
@@ -184,6 +209,7 @@ textarea{min-height:110px}
  function showWarn(m){ var w=$('warn'); w.textContent=m; w.style.display='block'; if(navigator.vibrate) navigator.vibrate(300); }
  function hideWarn(){ $('warn').style.display='none'; }
  function edit1(a,b){ if(Math.abs(a.length-b.length)>1) return false; var i=0,j=0,d=0; while(i<a.length&&j<b.length){ if(a[i]===b[j]){i++;j++;continue;} d++; if(d>1) return false; if(a.length>b.length) i++; else if(b.length>a.length) j++; else {i++;j++;} } return d+(a.length-i)+(b.length-j)<=1; }
+ function isCue(reason){ return /^cue/.test(reason||''); }
  function checkTrigger(text){
   var low=' '+text.toLowerCase().replace(/[^a-z0-9 ]/g,' ')+' ';
   var hit=null;
@@ -198,16 +224,24 @@ textarea{min-height:110px}
    var cues=['your thoughts','any update','any updates','what do you think','over to you','anything from you','your side'];
    cues.forEach(function(c){ if(!hit && low.indexOf(' '+c+' ')>-1) hit='cue: '+c; });
   }
-  if(hit) schedule(hit);
+  if(hit){
+   // show at once that something was heard, before any waiting
+   if(!isCue(hit) && Date.now()-lastName>=NAME_COOLDOWN){
+    $('reply').classList.add('hot');
+    $('trigger').textContent='Heard '+hit+' at '+new Date().toLocaleTimeString()+' - checking what was asked...';
+    if(navigator.vibrate) navigator.vibrate(80);
+   }
+   schedule(hit);
+  }
  }
 
  function wordCount(ms){ return recentText(ms).split(/\s+/).filter(Boolean).length; }
  function plural(n){ return n+' word'+(n===1?'':'s'); }
  function clearRetry(){ clearTimeout(retryTimer); retryTimer=null; retry=null; }
- function showThin(){ $('replyText').textContent='Heard '+retry.reason+', but only '+plural(wordCount(WINDOW_MS))+' so far. Waiting for more speech.'; }
- function startRetry(reason){
-  var since=(retry&&retry.reason===reason)?retry.since:Date.now();   // a repeat of the same trigger does not extend the wait
-  clearTimeout(retryTimer); retry={reason:reason,since:since}; showThin();
+ function showThin(){ $('replyText').textContent='Heard '+retry.reason+', but only '+plural(wordCount(WINDOW_MS))+' so far. Waiting for more speech. Tap Ask now to force it.'; }
+ function startRetry(reason,need){
+  var since=(retry&&retry.reason===reason)?retry.since:Date.now();
+  clearTimeout(retryTimer); retry={reason:reason,since:since,need:need}; showThin();
   retryTimer=setTimeout(expireRetry,Math.max(0,THIN_WAIT_MS-(Date.now()-since)));
  }
  function expireRetry(){
@@ -217,47 +251,108 @@ textarea{min-height:110px}
  function recheckRetry(){
   if(!retry) return;
   if(Date.now()-retry.since>=THIN_WAIT_MS) return expireRetry();
-  if(wordCount(WINDOW_MS)>=MIN_WORDS_AUTO){ var r=retry.reason; clearRetry(); fire(r,false); } else showThin();
+  if(wordCount(WINDOW_MS)>=retry.need){ var r=retry.reason; clearRetry(); fire(r,false,true); } else showThin();
  }
- // cancel whatever is waiting or stuck: the trigger timer, a thin-speech wait, and a request in flight (its reply will be ignored)
  function abortInflight(){ inflight.slice().forEach(function(c){ try{c.abort()}catch(e){} }); inflight=[]; }
  function clearStuck(){
-  clearTimeout(pending); pending=null; pendingReason=null; pendingStart=0; clearRetry();
+  clearTimeout(pending); pending=null; pendingReason=null; pendingStart=0; clearRetry(); queued=null;
   if(busy){ epoch++; abortInflight(); busy=false; $('reply').classList.remove('hot'); $('replyText').textContent='Cancelled. Tap Ask now to try again.'; }
  }
 
- function fire(reason,manual){
-  var now=Date.now();
-  if(busy) return;
-  if(!manual && now-lastTrigger<COOLDOWN) return;
+ var COMMON=
+  'You help the user (named in the context) during a live work call. '+
+  'Below are the last two minutes of an automatic transcript (it has errors, no speaker names, and the newest words are last) and his current context. ';
+
+ // mode: 'trigger' (name/story/cue/Ask now) or 'speak' (I want to speak)
+ function fire(reason,manual,force,mode){
+  var now=Date.now(); mode=mode||'trigger';
+  if(busy){ if(!manual) queued=reason; return; }          // a name hit during a running request is kept and answered next
+  var cue=isCue(reason);
+  if(!manual && !force){
+   if(cue){ if(now-Math.max(lastName,lastCue)<COOLDOWN) return; }
+   else { if(now-lastName<NAME_COOLDOWN) return; }
+  }
   var n=wordCount(WINDOW_MS);
-  if(manual && n<MIN_WORDS_MANUAL){ $('replyText').textContent='Not enough speech yet ('+plural(n)+' in the last 2 minutes, need at least '+MIN_WORDS_MANUAL+'). Keep listening, then tap Ask now again.'; return; }
-  if(!manual && n<MIN_WORDS_AUTO){ startRetry(reason); return; }
+  if(manual){
+   var minM=(mode==='speak')?MIN_WORDS_SPEAK:MIN_WORDS_MANUAL;
+   if(n<minM){ $('replyText').textContent='Not enough speech yet ('+plural(n)+' in the last 2 minutes, need at least '+minM+'). Keep listening, then try again.'; return; }
+  } else if(!force){
+   var need=cue?MIN_WORDS_AUTO:MIN_WORDS_NAME;
+   if(n<need){ startRetry(reason,need); return; }
+  }
   clearRetry();
-  lastTrigger=now;
-  
+  if(!manual){ if(cue) lastCue=now; else lastName=now; }
   busy=true; var my=epoch;
   if(navigator.vibrate) navigator.vibrate([120,80,120]);
   $('reply').classList.add('hot');
   $('replyText').textContent='Thinking…';
-  $('trigger').textContent='Heard '+reason+' at '+new Date().toLocaleTimeString()+(($('context').value.trim()||$('brief').value.trim())?'':' (brief and today are EMPTY - add them in Settings)');
-  var prompt='You help the user (named in the context) during a live work call. '+
-   'Below is the last two minutes of an automatic transcript (it has errors) and his current context. '+
-   'If the user\'s name (or a misheard version of it) appears just before or after a question or request, treat that question as directed at them. If someone is asking the user something or it is their turn, reply with ONE or TWO short spoken sentences they can say: plain, friendly, junior tone, no jargon beyond what the call used, never promise dates or decisions that belong to others. '+
-   'This was triggered because the user\'s name, one of their work items or a cue phrase was just heard, which does not mean anyone asked them anything. Only answer if the transcript contains a real question or request for the user (a direct question, a request for an update, or their name followed by a request). If there is none, reply with exactly: Nothing for you. Do not invent a question, do not summarise the call, and do not give a status line unless asked for one. If a question is directed at them but the transcript is garbled, reply with one short line asking them to repeat it.\n\n'+
-   'PROJECT BRIEF:\n'+$('brief').value+'\n\nTODAY:\n'+$('context').value+'\n\nTRANSCRIPT:\n'+recentText(WINDOW_MS);
+  $('trigger').textContent=(mode==='speak'?'Speak request':'Heard '+reason)+' at '+new Date().toLocaleTimeString()+(($('context').value.trim()||$('brief').value.trim())?'':' (brief and today are EMPTY - add them in Settings)');
+  var prompt;
+  if(mode==='speak'){
+   prompt=COMMON+
+    'The user now wants to speak. Give ONE sentence (at most 25 words) he can say right now that fits what is being discussed at the end of the transcript. '+
+    'If one of his items in the brief or today notes touches the topic, give his status on it or his one question. If none does, give a short, polite contribution such as one clarifying question about the topic. '+
+    'Plain, friendly, junior tone. Never invent facts, dates or decisions that are not in the brief or today notes, and never promise anything that belongs to others. Output only the sentence.\n\n';
+  } else {
+   prompt=COMMON+
+    'If the user\'s name (or a misheard version of it) appears just before or after a question or request, treat that question as directed at them. If someone is asking the user something or it is their turn, reply with ONE or TWO short spoken sentences they can say: plain, friendly, junior tone, no jargon beyond what the call used, never promise dates or decisions that belong to others. '+
+    'This was triggered because the user\'s name, one of their work items or a cue phrase was just heard ('+reason+'), which does not mean anyone asked them anything. Only answer if the transcript contains a real question or request for the user (a direct question, a request for an update, or their name followed by a request). If there is none, reply with exactly: Nothing for you. Do not invent a question, do not summarise the call, and do not give a status line unless asked for one. If a question is directed at them but the transcript is garbled, reply with one short line asking them to repeat it.\n\n';
+  }
+  prompt+='PROJECT BRIEF:\n'+$('brief').value+'\n\nTODAY:\n'+$('context').value+'\n\nTRANSCRIPT:\n'+recentText(WINDOW_MS);
   sample(prompt,{max:250})
-   .then(function(r){ if(my!==epoch) return; $('replyText').textContent=r.text; replies++; $('replyCount').textContent=replies; })
+   .then(function(r){ if(my!==epoch) return;
+     var t=(r.text||'').trim(); replies++; $('replyCount').textContent=replies;
+     if(mode!=='speak' && /^nothing for you/i.test(t)){ $('replyText').textContent='Nothing asked of you right now.'; setTimeout(function(){ if(!busy) $('reply').classList.remove('hot'); },4000); }
+     else { $('replyText').textContent=t; if(navigator.vibrate) navigator.vibrate(200); }   // stays highlighted until Dismiss
+   })
    .catch(function(e){ if(my!==epoch) return; $('replyText').textContent='No reply ('+(e&&e.code||'error')+'): '+(e&&e.message||'');  })
-   .then(function(){ if(my!==epoch) return; busy=false; setTimeout(function(){$('reply').classList.remove('hot')},4000); });
+   .then(function(){ if(my!==epoch) return; busy=false; if(queued){ var q=queued; queued=null; fire(q,false,true); } });
  }
+ $('dismissBtn').onclick=function(){ $('reply').classList.remove('hot'); $('replyText').textContent=INITIAL_REPLY; $('trigger').textContent=''; };
 
- // speech
+ // ---------- notes for you: refreshed while others talk ----------
+ function renderNotes(text){
+  var lines=(text||'').split('\n').map(function(l){return l.trim()}).filter(Boolean);
+  var topic='', items=[];
+  lines.forEach(function(l){
+   if(/^topic\s*:/i.test(l)) topic=l.replace(/^topic\s*:/i,'').trim();
+   else if(/^[-•*]/.test(l)) items.push(l.replace(/^[-•*]\s*/,''));
+  });
+  $('notesTopic').textContent=topic||'Current topic';
+  var ul=$('notesList'); while(ul.firstChild) ul.removeChild(ul.firstChild);
+  items.slice(0,4).forEach(function(it){ var li=document.createElement('li'); if(/^asked\b/i.test(it)) li.className='asked'; li.textContent=it; ul.appendChild(li); });
+  if(!items.length){ var li=document.createElement('li'); li.textContent='Nothing of yours on this topic'; ul.appendChild(li); }
+ }
+ function refreshNotes(){
+  if(notesBusy||!notesOn||!running) return;
+  notesBusy=true; notesTry=Date.now(); var my=epoch;
+  var prompt=COMMON+
+   'Act as his live prompter. Output exactly this shape and nothing else:\n'+
+   'TOPIC: <3 to 6 words naming what is being discussed right now>\n'+
+   '- up to 3 lines, each at most 20 words, each something the user could say or ask on this topic that comes from the PROJECT BRIEF or TODAY notes (his status, his open ask, who owes what, a date already in the notes).\n'+
+   'If it sounds like someone is asking him something, make the first line start with ASKED: and give a one-line answer he can say.\n'+
+   'Never invent facts or dates. If nothing in the brief or today notes touches the topic, output the TOPIC line and then the single line: - Nothing of yours on this topic\n\n'+
+   'PROJECT BRIEF:\n'+$('brief').value+'\n\nTODAY:\n'+$('context').value+'\n\nTRANSCRIPT:\n'+recentText(WINDOW_MS);
+  sample(prompt,{max:320})
+   .then(function(r){ if(my!==epoch) return; renderNotes(r.text); notesAt=Date.now(); })
+   .catch(function(e){ if(my!==epoch) return; $('notesTopic').textContent='Notes paused ('+(e&&e.code||'error')+'): '+(e&&e.message||''); })
+   .then(function(){ notesBusy=false; });
+ }
+ setInterval(function(){
+  if(!running||!notesOn||notesBusy) return;
+  if(Date.now()-notesTry<NOTES_EVERY_MS) return;
+  if(lastHeard<=notesTry) return;               // no new finished speech since the last try
+  if(wordCount(30000)<8) return;
+  refreshNotes();
+ },4000);
+ $('notesBtn').onclick=function(){ notesOn=!notesOn; this.textContent=notesOn?'Notes: on':'Notes: off'; save(); if(notesOn&&running){ notesTry=0; refreshNotes(); } };
+
+ // ---------- speech ----------
  var SR=window.SpeechRecognition||window.webkitSpeechRecognition;
  function detachRec(){ var o=rec; rec=null; if(!o) return; o.onresult=o.onerror=o.onend=o.onaudiostart=o.onsoundstart=o.onspeechstart=null; try{o.abort?o.abort():o.stop()}catch(e){} }
  function startRec(){
-  detachRec();
-  if(!SR){ $('replyText').textContent='This browser has no speech recognition. Use Chrome on the Pixel.'; return; }
+  detachRec(); interimText='';
+  if(!SR){ $('replyText').textContent='This browser has no speech recognition. Use Chrome on the phone.'; running=false; setUI(); return; }
   var me=rec=new SR(); rec.continuous=true; rec.interimResults=true; rec.lang='en-US';
   rec.onaudiostart=function(){ if(rec!==me) return; hear.audio=Date.now(); renderHeard(); };
   rec.onsoundstart=function(){ if(rec!==me) return; hear.sound=Date.now(); renderHeard(); };
@@ -277,6 +372,8 @@ textarea{min-height:110px}
       checkTrigger(t); } }
     else interim+=r[0].transcript;
    }
+   interimText=interim.trim();
+   if(interimText){ lastHeard=Date.now(); checkTrigger(interimText); }     // catch a name before the sentence is finished
    var cutoff=Date.now()-3*60*60*1000; while(segs.length && segs[0].t<cutoff) segs.shift();
    if(pending) schedule(pendingReason);
    recheckRetry();
@@ -284,28 +381,37 @@ textarea{min-height:110px}
    renderHeard();
   };
   rec.onerror=function(ev){ if(rec!==me) return; $('diag').textContent+='speech error: '+ev.error+(ev.message?(' ('+ev.message+')'):'')+'\n'; if(ev.error==='not-allowed'||ev.error==='service-not-allowed'||ev.error==='audio-capture'){ running=false; setUI(); $('replyText').textContent='Speech stopped: '+ev.error+'. See the diagnostic lines above.'; } };
-  rec.onend=function(){ if(rec!==me) return; if(running){ restarts++; $('restarts').textContent=restarts; try{rec.start()}catch(e){ setTimeout(function(){ if(running&&rec===me) try{rec.start()}catch(e2){} },400);} } };
+  // Chrome ends recognition after every pause; restarting at once is normal (hundreds per hour). A sentence cut off by the restart is kept as text.
+  rec.onend=function(){ if(rec!==me) return;
+   if(interimText){ var tt=interimText; interimText=''; var l2=segs.length?segs[segs.length-1]:null; if(!(l2 && l2.text.toLowerCase().indexOf(tt.toLowerCase())>-1)) segs.push({t:Date.now(),text:tt}); }
+   if(running){ restarts++; $('restarts').textContent=restarts; try{rec.start()}catch(e){ setTimeout(function(){ if(running&&rec===me) try{rec.start()}catch(e2){} },400);} } };
   try{ rec.start(); }catch(e){}
  }
  function renderHeard(){
   var el=$('heard'); if(!running){ el.textContent=''; return; }
-  function ago(t){ return t?Math.round((Date.now()-t)/1000)+'s ago':'never'; }
   el.textContent='Heard: mic audio '+(hear.audio?'open':'not open yet')+' · sound '+ago(hear.sound)+' · text '+ago(hear.text);
  }
  function setUI(){
   renderHeard();
-  $('startBtn').disabled=running; $('stopBtn').disabled=!running; $('askBtn').disabled=!running; $('wrapBtn').disabled=segs.length===0;
+  $('startBtn').disabled=running; $('stopBtn').disabled=!running; $('askBtn').disabled=!running; $('speakBtn').disabled=!running; $('wrapBtn').disabled=segs.length===0;
   $('micState').textContent=running?'listening':'off'; $('micState').className=running?'live':'off';
+  $('notesAge').textContent=!notesOn?'off':(notesBusy?'updating...':(notesAt?'updated '+ago(notesAt):''));
+  setDriveStatus();
  }
  async function keepAwake(){ try{ if('wakeLock' in navigator){ wakeLock=await navigator.wakeLock.request('screen'); } }catch(e){} }
  document.addEventListener('visibilitychange',function(){ if(document.visibilityState==='visible' && running) keepAwake(); });
 
- $('startBtn').onclick=function(){ clearStuck(); lastHeard=Date.now(); hideWarn(); syncBrief(); running=true; setUI(); keepAwake(); startRec(); };
- $('stopBtn').onclick=function(){ running=false; clearStuck(); try{rec&&rec.stop()}catch(e){} if(wakeLock){try{wakeLock.release()}catch(e){}} setUI(); };
+ $('startBtn').onclick=function(){
+  clearStuck(); lastHeard=Date.now(); hideWarn(); epoch++; notesTry=0; notesAt=0;
+  running=true; setUI(); keepAwake(); startRec();
+  // one tap does everything: renew the Drive sign-in (no popup if already approved) and refresh the brief
+  if(driveLive()) syncBrief(); else if($('gcid').value.trim()) connectDrive(syncBrief,true);
+ };
+ $('stopBtn').onclick=function(){ running=false; clearStuck(); interimText=''; try{rec&&rec.stop()}catch(e){} if(wakeLock){try{wakeLock.release()}catch(e){}} setUI(); };
  $('askBtn').onclick=function(){ fire('manual ask',true); };
+ $('speakBtn').onclick=function(){ fire('speak',true,true,'speak'); };
 
- $('wrapBtn').onclick=function(){ syncBrief();
-  
+ $('wrapBtn').onclick=function(){
   var full=segs.map(function(s){return s.text}).join(' ');
   if(!full){ return; }
   $('wrapBox').open=true; $('wrapOut').textContent='Thinking…';
@@ -320,13 +426,14 @@ textarea{min-height:110px}
    .catch(function(e){ if(myw!==epoch) return; $('wrapOut').textContent='Wrap failed ('+(e&&e.code||'error')+'): '+(e&&e.message||'')});
  };
  $('resetBtn').onclick=function(){
-  epoch++; abortInflight();                       // any reply still in flight is now stale and will be ignored
+  epoch++; abortInflight(); queued=null; notesBusy=false; notesTry=0; notesAt=0; interimText='';
   clearTimeout(pending); pending=null; pendingReason=null; pendingStart=0; clearRetry();
-  hear.audio=hear.sound=hear.text=0; segs.length=0; busy=false; lastTrigger=0; replies=0; lastHeard=running?Date.now():0;
+  hear.audio=hear.sound=hear.text=0; segs.length=0; busy=false; lastName=0; lastCue=0; replies=0; lastHeard=running?Date.now():0;
   $('reply').classList.remove('hot'); $('replyText').textContent=INITIAL_REPLY; $('trigger').textContent='';
   $('replyCount').textContent=0; $('wrapOut').textContent=INITIAL_WRAP; $('diag').textContent=''; hideWarn();
+  $('notesTopic').textContent='Start listening and notes appear here.'; $('notesList').textContent='';
   renderTranscript('');
-  if(running) startRec();                         // fresh recognizer; startRec detaches the old one first
+  if(running) startRec();
   setUI();
  };
  $('clearTrBtn').onclick=function(){ segs.length=0; clearRetry(); renderTranscript(''); setUI(); };
@@ -340,42 +447,77 @@ textarea{min-height:110px}
   try{ var pp=document.permissionsPolicy||document.featurePolicy; out.push('policy allows microphone: '+(pp&&pp.allowsFeature?pp.allowsFeature('microphone'):'unknown')); }catch(e){ out.push('policy check failed'); }
   try{ if(navigator.permissions){ var st=await navigator.permissions.query({name:'microphone'}); out.push('permission state: '+st.state); } }catch(e){ out.push('permission query: n/a'); }
   out.push('storage: '+storageCheck());
-  try{ var sv=JSON.parse(localStorage.getItem('sidekick')||'null'); out.push('saved settings found: '+!!sv+(sv?(' (context '+(sv.context||'').length+' chars, key '+((sv.apikey||'').length?'yes':'no')+')'):'')); }catch(e){ out.push('saved settings: unreadable'); }
+  try{ var sv=JSON.parse(localStorage.getItem('sidekick')||'null'); out.push('saved settings found: '+!!sv+(sv?(' (brief '+(sv.brief||'').length+' chars, today '+(sv.context||'').length+' chars, names "'+(sv.names||'')+'", key '+((sv.apikey||'').length?'yes':'no')+')'):'')); }catch(e){ out.push('saved settings: unreadable'); }
   out.push('speech API present: '+!!(window.SpeechRecognition||window.webkitSpeechRecognition));
   try{ var stream=await navigator.mediaDevices.getUserMedia({audio:true}); out.push('getUserMedia: OK'); stream.getTracks().forEach(function(t){t.stop()}); }
   catch(e){ out.push('getUserMedia: '+e.name+' - '+e.message); }
   $('diag').textContent=out.join('\n')+'\n';
  };
 
- var gToken=null, gTokenExp=0, gClient=null;
- function loadGIS(cb){ if(window.google&&google.accounts&&google.accounts.oauth2) return cb(); var sc=document.createElement('script'); sc.src='https://accounts.google.com/gsi/client'; sc.onload=cb; sc.onerror=function(){ $('driveStatus').textContent='Drive brief: could not load Google sign-in'; }; document.head.appendChild(sc); }
- function connectDrive(then){
-  var cid=$('gcid').value.trim(); if(!cid){ $('driveStatus').textContent='Drive brief: add the Google client ID in Settings first'; return; }
+ // ---------- Drive brief ----------
+ var gToken=null, gTokenExp=0, gClient=null, gClientCid='', gThen=null, driveErr='', driveEver=false;
+ function driveLive(){ return !!gToken && Date.now()<gTokenExp; }
+ function setDriveStatus(){
+  var el=$('driveStatus'), btn=$('driveBtn');
+  var txt, need=false;
+  if(driveErr){ txt='Brief: '+driveErr+(briefAt?' - using saved copy from '+clock(briefAt)+' ('+ago(briefAt)+')':''); need=true; }
+  else if(driveLive()){ txt='Brief: live from Drive, synced '+(briefAt?clock(briefAt)+' ('+ago(briefAt)+')':'just now'); }
+  else if(driveEver){ txt='Brief: Drive sign-in lapsed - using saved copy from '+(briefAt?clock(briefAt)+' ('+ago(briefAt)+')':'earlier'); need=true; }
+  else { txt='Brief: not connected'+(briefAt?' - using saved copy from '+clock(briefAt)+' ('+ago(briefAt)+')':'')+'. Tap Start or Connect Drive.'; }
+  el.textContent=txt; el.style.color=need?'var(--accent)':'var(--muted)';
+  btn.textContent=(driveEver&&!driveLive())?'Reconnect Drive':'Connect Drive';
+  btn.className=(driveEver&&!driveLive())?'primary':'';
+ }
+ function loadGIS(cb){ if(window.google&&google.accounts&&google.accounts.oauth2) return cb(); var sc=document.createElement('script'); sc.src='https://accounts.google.com/gsi/client'; sc.onload=cb; sc.onerror=function(){ driveErr='could not load Google sign-in'; setDriveStatus(); }; document.head.appendChild(sc); }
+ function connectDrive(then,silent){
+  var cid=$('gcid').value.trim(); if(!cid){ driveErr='add the Google client ID in Settings first'; setDriveStatus(); return; }
+  gThen=then||null;
   loadGIS(function(){
-   gClient=google.accounts.oauth2.initTokenClient({client_id:cid, scope:'https://www.googleapis.com/auth/drive.readonly', callback:function(resp){
-     if(resp&&resp.access_token){ gToken=resp.access_token; gTokenExp=Date.now()+((resp.expires_in||3600)-60)*1000; $('driveStatus').textContent='Drive brief: connected'; if(then) then(); }
-     else { $('driveStatus').textContent='Drive brief: sign-in failed'; }
-   }});
-   gClient.requestAccessToken();
+   if(!gClient||gClientCid!==cid){
+    gClientCid=cid;
+    gClient=google.accounts.oauth2.initTokenClient({client_id:cid, scope:'https://www.googleapis.com/auth/drive.readonly',
+     callback:function(resp){
+      if(resp&&resp.access_token){ gToken=resp.access_token; gTokenExp=Date.now()+((resp.expires_in||3600)-60)*1000; driveErr=''; driveEver=true; var f=gThen; gThen=null; if(f) f(); setDriveStatus(); }
+      else { gThen=null; driveErr='sign-in failed, tap Reconnect Drive'; setDriveStatus(); }
+     },
+     error_callback:function(err){ gThen=null; driveErr='sign-in needs a tap on Reconnect Drive'; setDriveStatus(); }});
+   }
+   try{ gClient.requestAccessToken({prompt:''}); }catch(e){ driveErr='sign-in could not start'; setDriveStatus(); }
   });
  }
  function gfetch(url){ return fetch(url,{headers:{Authorization:'Bearer '+gToken}}).then(function(r){ if(!r.ok) throw new Error('HTTP '+r.status); return r; }); }
  function syncBrief(){
-  if(!gToken||Date.now()>gTokenExp){ if(gToken) $('driveStatus').textContent='Drive brief: sign-in expired, tap Connect Drive'; return Promise.resolve(); }
+  if(!driveLive()){ setDriveStatus(); return Promise.resolve(); }
   var folder=$('gfolder').value.trim();
   var q=encodeURIComponent("'"+folder+"' in parents and name contains 'sidekick-brief' and trashed=false");
-  return gfetch('https://www.googleapis.com/drive/v3/files?q='+q+'&orderBy=createdTime%20desc&pageSize=1&fields=files(id,name,createdTime)')
+  return gfetch('https://www.googleapis.com/drive/v3/files?q='+q+'&orderBy=createdTime%20desc&pageSize=1&fields=files(id,name,createdTime,mimeType)')
    .then(function(r){return r.json()})
-   .then(function(j){ var f=j.files&&j.files[0]; if(!f) throw new Error('no brief file in folder'); return gfetch('https://www.googleapis.com/drive/v3/files/'+f.id+'?alt=media').then(function(r){return r.text()}).then(function(t){ $('brief').value=t; save(); $('driveStatus').textContent='Drive brief: synced '+new Date().toLocaleTimeString()+' ('+new Date(f.createdTime).toLocaleString()+' version)'; }); })
-   .catch(function(e){ $('driveStatus').textContent='Drive brief: sync failed ('+e.message+'), using last saved copy'; });
+   .then(function(j){
+     var f=j.files&&j.files[0]; if(!f) throw new Error('no brief file in folder');
+     // a Google Doc cannot be downloaded directly: it has to be exported as plain text
+     var url=(f.mimeType==='application/vnd.google-apps.document')
+       ? 'https://www.googleapis.com/drive/v3/files/'+f.id+'/export?mimeType=text%2Fplain'
+       : 'https://www.googleapis.com/drive/v3/files/'+f.id+'?alt=media';
+     return gfetch(url).then(function(r){return r.text()}).then(function(t){
+       if(!t||t.trim().length<50) throw new Error('brief file looks empty');      // never overwrite a good saved copy with nothing
+       $('brief').value=t; briefAt=Date.now(); driveErr=''; save(); setDriveStatus();
+     });
+   })
+   .catch(function(e){ driveErr='sync failed ('+e.message+')'; setDriveStatus(); });
  }
- $('driveBtn').onclick=function(){ connectDrive(syncBrief); };
- setInterval(function(){ if(running) syncBrief(); }, 30*60*1000);
+ $('driveBtn').onclick=function(){ connectDrive(syncBrief,false); };
+ // keep the sign-in and the brief fresh while listening: renew 5 minutes before the token ends, re-read the brief every 15 minutes
+ setInterval(function(){
+  if(!running||!driveEver) return;
+  if(Date.now()>gTokenExp-5*60*1000){ connectDrive(syncBrief,true); }
+  else if(Date.now()-briefAt>15*60*1000){ syncBrief(); }
+ },60*1000);
  setInterval(function(){
   if(running && lastHeard && Date.now()-lastHeard>90000) showWarn('No speech heard for 90 seconds. Check the mic, volume, or tap Stop then Start listening.');
  },15000);
  document.addEventListener('visibilitychange',function(){ if(document.visibilityState!=='visible' && running) showWarn('Screen was off or page in background: listening may have stopped. Check the transcript.'); });
  setInterval(setUI,2000);
+ setUI();
 })();
 </script>
 </body>

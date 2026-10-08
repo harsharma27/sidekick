@@ -417,8 +417,9 @@ textarea{min-height:110px}
   $('wrapBox').open=true; $('wrapOut').textContent='Thinking…';
   var prompt='From this automatic transcript of a Teams meeting (it has errors and no speaker names), list ONLY what concerns the user named in the brief. '+
    'RULES: Every item must come from something actually said in the TRANSCRIPT. Use the brief and today notes ONLY to understand names, stories and context, never as a source of items. '+
-   'The transcript has no speaker labels, so if it is unclear who said something or who it is for, write (unclear who) instead of guessing a name. Do not claim something belongs to the user unless the transcript says so. '+
-   'Sections: Asked of the user; Decisions affecting their work; Follow-ups they might send. Plain short lines, no filler. If nothing, say Nothing for you.\n\n'+
+   'The transcript has no speaker labels. The phone sits with the user, so first-person promises in it ("leave it to me", "let me get back to", "I will", "I can take that") are probably the user\'s own: list them under Commitments the user made and add (verify speaker). Otherwise, if it is unclear who said something or who it is for, write (unclear who) instead of guessing a name. Do not claim something belongs to the user unless the transcript says so. '+
+   'Keep timing exactly as said (this sprint, next sprint, tomorrow, a date) and keep story numbers and names exactly as said; never merge two different timings into one line. '+
+   'Sections: Asked of the user; Commitments the user made; Decisions affecting their work; Follow-ups they might send (a follow-up for each commitment, naming who it goes to). Plain short lines, no filler. If a section has nothing, write Nothing for you under it.\n\n'+
    'PROJECT BRIEF:\n'+$('brief').value+'\n\nTODAY:\n'+$('context').value+'\n\nTRANSCRIPT:\n'+full.slice(-60000);
   var myw=epoch;
   sample(prompt,{max:1200,timeout:WRAP_TIMEOUT_MS})

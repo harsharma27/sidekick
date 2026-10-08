@@ -47,7 +47,7 @@ textarea{min-height:110px}
 </head>
 <body>
 <main>
-<h1>Meeting Sidekick <span style="font-weight:400">v11</span></h1>
+<h1>Meeting Sidekick <span style="font-weight:400">v12</span></h1>
 
 <div class="bar">
  <button id="startBtn" class="primary">Start listening</button>
@@ -62,6 +62,7 @@ textarea{min-height:110px}
 </div>
 
 <div id="diag" style="font-family:'IBM Plex Mono',monospace;font-size:13px;margin-bottom:10px;white-space:pre-wrap"></div>
+<div id="driveWarn" style="display:none;background:#9a6a00;color:#fff;padding:10px 12px;border-radius:10px;margin-bottom:10px;font-weight:600;cursor:pointer">Drive sign-in lapsed. Tap here to reconnect so the brief stays current.</div>
 <div id="warn" style="display:none;background:#b4441c;color:#fff;padding:10px 12px;border-radius:10px;margin-bottom:10px;font-weight:600"></div>
 <div id="driveStatus" style="font-size:13px;color:var(--muted);margin-bottom:8px">Brief: not connected</div>
 <div id="status">Mic: <b id="micState" class="off">off</b> · restarts: <b id="restarts">0</b> · replies: <b id="replyCount">0</b></div>
@@ -262,7 +263,8 @@ textarea{min-height:110px}
  var COMMON=
   'You help the user (named in the context) during a live work call. '+
   'Below are the last two minutes of an automatic transcript (it has errors, no speaker names, and the newest words are last) and his current context. '+
-  'The TRANSCRIPT is newer than the PROJECT BRIEF: when they disagree about timing, owners or decisions, the transcript is right and the brief is out of date. ';
+  'The TRANSCRIPT is newer than the PROJECT BRIEF: when they disagree about timing, owners or decisions, the transcript is right and the brief is out of date. '+
+  'The phone sits with the user, so in a one-to-one or small call any line addressed to "you", "Harsh" (or a misheard version) or "the BSA" (for example "you need to check...", "you take the screenshot", "can you share...") is HIS task or question, even when most of the topic belongs to other people. A thing another person says they will do themselves ("I will check with X") is theirs, not his. ';
 
  // mode: 'trigger' (name/story/cue/Ask now) or 'speak' (I want to speak)
  function fire(reason,manual,force,mode){
@@ -322,7 +324,7 @@ textarea{min-height:110px}
   });
   $('notesTopic').textContent=topic||'Current topic';
   var ul=$('notesList'); while(ul.firstChild) ul.removeChild(ul.firstChild);
-  items.slice(0,4).forEach(function(it){ var li=document.createElement('li'); if(/^asked\b/i.test(it)) li.className='asked'; li.textContent=it; ul.appendChild(li); });
+  items.slice(0,4).forEach(function(it){ var li=document.createElement('li'); if(/^(asked|yours)\b/i.test(it)) li.className='asked'; li.textContent=it; ul.appendChild(li); });
   if(!items.length){ var li=document.createElement('li'); li.textContent='Nothing of yours on this topic'; ul.appendChild(li); }
  }
  function refreshNotes(){
@@ -332,9 +334,9 @@ textarea{min-height:110px}
    'Act as his live prompter. Output exactly this shape and nothing else:\n'+
    'TOPIC: <3 to 6 words naming what is being discussed right now>\n'+
    '- up to 3 lines, each at most 20 words, each something the user could say or ask on this topic that comes from the PROJECT BRIEF or TODAY notes (his status, his open ask, who owes what, a date already in the notes).\n'+
-   'If it sounds like someone is asking him something, make the first line start with ASKED: and give a one-line answer he can say.\n'+
+   'If it sounds like someone is asking him something, make the first line start with ASKED: and give a one-line answer he can say. If someone just told him to do or check something, add a line starting Yours: that states the task in plain words with who said it if known.\n'+
    'If a decision, order, date or owner was just stated, make one line a read-back he can confirm, starting "Confirm:". '+
-   'Every line must be concrete (a story number, a name, a date or a decision). Never write filler such as "let me know if anything else comes up". Never invent facts or dates. If the transcript and the brief disagree, use the transcript. If nothing in the brief or today notes touches the topic, output the TOPIC line and then the single line: - Nothing of yours on this topic\n\n'+
+   'Every line must be concrete (a story number, a name, a date or a decision). Never write filler such as "let me know if anything else comes up". Never invent facts or dates. If the transcript and the brief disagree, use the transcript. Output the single line - Nothing of yours on this topic ONLY if nothing in the transcript is addressed to him or assigned to him AND nothing in the brief or today notes touches the topic; otherwise give at least the Yours: or Confirm: line\n\n'+
    'PROJECT BRIEF:\n'+$('brief').value+'\n\nTODAY:\n'+$('context').value+'\n\nTRANSCRIPT:\n'+recentText(WINDOW_MS);
   sample(prompt,{max:320})
    .then(function(r){ if(my!==epoch) return; renderNotes(r.text); notesAt=Date.now(); })
@@ -435,6 +437,7 @@ textarea{min-height:110px}
    'RULES: Every item must come from something actually said in the TRANSCRIPT. Use the brief and today notes ONLY to understand names, stories and context, never as a source of items: if a sentence, commitment or follow-up appears in the brief but is not repeated in the transcript, leave it out. If the brief and the transcript disagree, report what the transcript says. '+
    'The transcript has no speaker labels. The phone sits with the user, so first-person promises in it ("leave it to me", "let me get back to", "I will", "I can take that") are probably the user\'s own: list them under Commitments the user made and add (verify speaker). Otherwise, if it is unclear who said something or who it is for, write (unclear who) instead of guessing a name. Do not claim something belongs to the user unless the transcript says so. '+
    'Keep timing exactly as said (this sprint, next sprint, tomorrow, a date) and keep story numbers and names exactly as said; never merge two different timings into one line. '+
+   'If a date, number, owner or team name is garbled or could be heard two ways (for example "12:10 till 1:30"), quote the words as heard and add (as heard) instead of converting or guessing; fix a mishearing only when the brief\'s mishearing list gives the correction. Keep ownership exactly as said: if the transcript says a step is owned by one team, do not relabel it as another team or as the user. If another person says they will do something themselves (for example ask a third person for access), list it as theirs, not as the user\'s ask. '+
    'Sections: Asked of the user; Commitments the user made; Decisions affecting their work; Follow-ups they might send (a follow-up for each commitment, naming who it goes to). Plain short lines, no filler. If a section has nothing, write Nothing for you under it.\n\n'+
    'PROJECT BRIEF:\n'+$('brief').value+'\n\nTODAY:\n'+$('context').value+'\n\nTRANSCRIPT:\n'+full.slice(-60000);
   var myw=epoch;
@@ -484,6 +487,7 @@ textarea{min-height:110px}
   el.textContent=txt; el.style.color=need?'var(--accent)':'var(--muted)';
   btn.textContent=(driveEver&&!driveLive())?'Reconnect Drive':'Connect Drive';
   btn.className=(driveEver&&!driveLive())?'primary':'';
+  var dw=$('driveWarn'); if(dw) dw.style.display=(need&&(driveEver||driveErr))?'block':'none';
  }
  function loadGIS(cb){ if(window.google&&google.accounts&&google.accounts.oauth2) return cb(); var sc=document.createElement('script'); sc.src='https://accounts.google.com/gsi/client'; sc.onload=cb; sc.onerror=function(){ driveErr='could not load Google sign-in'; setDriveStatus(); }; document.head.appendChild(sc); }
  function connectDrive(then,silent){
@@ -523,6 +527,7 @@ textarea{min-height:110px}
    .catch(function(e){ driveErr='sync failed ('+e.message+')'; setDriveStatus(); });
  }
  $('driveBtn').onclick=function(){ connectDrive(syncBrief,false); };
+ $('driveWarn').onclick=function(){ connectDrive(syncBrief,false); };
  // keep the sign-in and the brief fresh while listening: renew 5 minutes before the token ends, re-read the brief every 15 minutes
  setInterval(function(){
   if(!running||!driveEver) return;

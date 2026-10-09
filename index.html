@@ -47,7 +47,7 @@ textarea{min-height:110px}
 </head>
 <body>
 <main>
-<h1>Meeting Sidekick <span style="font-weight:400">v12</span></h1>
+<h1>Meeting Sidekick <span style="font-weight:400">v13</span></h1>
 
 <div class="bar">
  <button id="startBtn" class="primary">Start listening</button>
@@ -119,6 +119,7 @@ textarea{min-height:110px}
  <summary>Wrap output</summary>
  <div id="wrapOut">Tap Wrap after the call.</div>
  <button id="copyBtn" style="margin-top:8px">Copy</button>
+ <div id="wrapSaved" style="font-size:13px;color:var(--muted);margin-top:6px"></div>
 </details>
 
 <p class="note">Nothing is stored after you close this page except the settings above. Speech-to-text runs through the phone browser. Replies come from Claude via your own API key, saved only in this browser on this phone.</p>
@@ -442,7 +443,7 @@ textarea{min-height:110px}
    'PROJECT BRIEF:\n'+$('brief').value+'\n\nTODAY:\n'+$('context').value+'\n\nTRANSCRIPT:\n'+full.slice(-60000);
   var myw=epoch;
   sample(prompt,{max:1200,timeout:WRAP_TIMEOUT_MS})
-   .then(function(r){ if(myw!==epoch) return; $('wrapOut').textContent=r.text})
+   .then(function(r){ if(myw!==epoch) return; $('wrapOut').textContent=r.text; saveWrap(r.text)})
    .catch(function(e){ if(myw!==epoch) return; $('wrapOut').textContent='Wrap failed ('+(e&&e.code||'error')+'): '+(e&&e.message||'')});
  };
  $('resetBtn').onclick=function(){
@@ -450,7 +451,7 @@ textarea{min-height:110px}
   clearTimeout(pending); pending=null; pendingReason=null; pendingStart=0; clearRetry();
   hear.audio=hear.sound=hear.text=0; segs.length=0; busy=false; lastName=0; lastCue=0; replies=0; lastHeard=running?Date.now():0;
   $('reply').classList.remove('hot'); $('replyText').textContent=INITIAL_REPLY; $('trigger').textContent='';
-  $('replyCount').textContent=0; $('wrapOut').textContent=INITIAL_WRAP; $('diag').textContent=''; hideWarn();
+  $('replyCount').textContent=0; $('wrapOut').textContent=INITIAL_WRAP; $('wrapSaved').textContent=''; pendingWrap=null; $('diag').textContent=''; hideWarn();
   $('notesTopic').textContent='Start listening and notes appear here.'; $('notesList').textContent='';
   renderTranscript('');
   if(running) startRec();
@@ -496,7 +497,7 @@ textarea{min-height:110px}
   loadGIS(function(){
    if(!gClient||gClientCid!==cid){
     gClientCid=cid;
-    gClient=google.accounts.oauth2.initTokenClient({client_id:cid, scope:'https://www.googleapis.com/auth/drive.readonly',
+    gClient=google.accounts.oauth2.initTokenClient({client_id:cid, scope:'https://www.googleapis.com/auth/drive.readonly https://www.googleapis.com/auth/drive.file',
      callback:function(resp){
       if(resp&&resp.access_token){ gToken=resp.access_token; gTokenExp=Date.now()+((resp.expires_in||3600)-60)*1000; driveErr=''; driveEver=true; var f=gThen; gThen=null; if(f) f(); setDriveStatus(); }
       else { gThen=null; driveErr='sign-in failed, tap Reconnect Drive'; setDriveStatus(); }
@@ -526,8 +527,31 @@ textarea{min-height:110px}
    })
    .catch(function(e){ driveErr='sync failed ('+e.message+')'; setDriveStatus(); });
  }
- $('driveBtn').onclick=function(){ connectDrive(syncBrief,false); };
- $('driveWarn').onclick=function(){ connectDrive(syncBrief,false); };
+ // ---------- Save the wrap to Drive so the daily tracker sweep can read it ----------
+ var pendingWrap=null;
+ function pad2(n){ return (n<10?'0':'')+n; }
+ function saveWrap(text){
+  var d=new Date();
+  pendingWrap={ name:'wrap-'+d.getFullYear()+'-'+pad2(d.getMonth()+1)+'-'+pad2(d.getDate())+'-'+pad2(d.getHours())+pad2(d.getMinutes()), text:text };
+  flushWrap();
+ }
+ function flushWrap(){
+  var w=pendingWrap; if(!w) return Promise.resolve();
+  var el=$('wrapSaved');
+  if(!text_ok(w.text)){ pendingWrap=null; el.textContent=''; return Promise.resolve(); }
+  if(!driveLive()){ el.textContent='Wrap not saved to Drive yet: tap Reconnect Drive and approve, it saves right after.'; return Promise.resolve(); }
+  var folder=$('gfolder').value.trim();
+  var meta={name:w.name, mimeType:'text/plain'}; if(folder) meta.parents=[folder];
+  var b='sidekick_wrap_boundary';
+  var body='--'+b+'\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n'+JSON.stringify(meta)+'\r\n--'+b+'\r\nContent-Type: text/plain; charset=UTF-8\r\n\r\n'+w.text+'\r\n--'+b+'--';
+  return fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart',{method:'POST',headers:{Authorization:'Bearer '+gToken,'Content-Type':'multipart/related; boundary='+b},body:body})
+   .then(function(r){ if(!r.ok) throw new Error('HTTP '+r.status); return r.json(); })
+   .then(function(){ pendingWrap=null; el.textContent='Wrap saved to Drive as '+w.name+'.'; })
+   .catch(function(e){ el.textContent='Wrap not saved to Drive ('+e.message+'). Tap Reconnect Drive and approve, or use Copy.'; });
+ }
+ function text_ok(t){ return !!t && t.indexOf('Wrap failed')!==0 && t!=='Thinking…'; }
+ $('driveBtn').onclick=function(){ connectDrive(function(){ syncBrief().then(flushWrap); },false); };
+ $('driveWarn').onclick=function(){ connectDrive(function(){ syncBrief().then(flushWrap); },false); };
  // keep the sign-in and the brief fresh while listening: renew 5 minutes before the token ends, re-read the brief every 15 minutes
  setInterval(function(){
   if(!running||!driveEver) return;

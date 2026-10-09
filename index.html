@@ -430,6 +430,7 @@ textarea{min-height:110px}
  $('askBtn').onclick=function(){ fire('manual ask',true); };
  $('speakBtn').onclick=function(){ fire('speak',true,true,'speak'); };
 
+ function liveNotesText(){ try{ var out=[]; var li=$('notesList').querySelectorAll('li'); for(var i=0;i<li.length;i++){ var t=li[i].textContent||''; if(/^\s*(Yours:|ASKED:)/i.test(t)) out.push(t.trim()); } return out.length?out.join('\n'):'(none)'; }catch(e){ return '(none)'; } }
  var wrapBusy=false, wrapSegCount=0;   // one Drive wrap file and one transcript file per listening session, updated by later wraps
  $('wrapBtn').onclick=function(){ doWrap(false); };
  function doWrap(auto){
@@ -444,6 +445,9 @@ textarea{min-height:110px}
    'The transcript has no speaker labels. The phone sits with the user, so first-person promises in it ("leave it to me", "let me get back to", "I will", "I can take that") are probably the user\'s own: list them under Commitments the user made and add (verify speaker). Otherwise, if it is unclear who said something or who it is for, write (unclear who) instead of guessing a name. Do not claim something belongs to the user unless the transcript says so. '+
    'Keep timing exactly as said (this sprint, next sprint, tomorrow, a date) and keep story numbers and names exactly as said; never merge two different timings into one line. '+
    'If a date, number, owner or team name is garbled or could be heard two ways (for example "12:10 till 1:30"), quote the words as heard and add (as heard) instead of converting or guessing; fix a mishearing only when the brief\'s mishearing list gives the correction. Keep ownership exactly as said: if the transcript says a step is owned by one team, do not relabel it as another team or as the user. If another person says they will do something themselves (for example ask a third person for access), list it as theirs, not as the user\'s ask. '+
+   'THE USER\'S NAME AND MISHEARINGS: Harsh, Harsha, Horsham, Hash, Hush, Harsh Sharma'+($('names').value?', '+$('names').value:'')+'. A line addressed to any of these, or to "you" while the user is on the call, is addressed to the user, even if the rest of the sentence is garbled. A request such as "can you follow up", "maybe you can check" or "is Harsh on that email" is an Asked of the user item, and an answer such as "okay", "sounds good" or "sure" right after it is a Commitment (verify speaker). '+
+   'If a follow-up request is present but the person it is for is unclear, list it as (unclear who) instead of dropping it; only write Nothing for you under a section when the transcript really contains nothing for it. '+
+   'LIVE NOTES CANDIDATES: the lines below were flagged during the call. Treat each Yours: or ASKED: line as a candidate only. Keep it if the transcript supports it, drop it if the transcript does not, and never add detail that is not in the transcript.\n'+liveNotesText()+'\n'+
    'Sections: Asked of the user; Commitments the user made; Decisions affecting their work; Follow-ups they might send (a follow-up for each commitment, naming who it goes to). Plain short lines, no filler. If a section has nothing, write Nothing for you under it.\n\n'+
    'PROJECT BRIEF:\n'+$('brief').value+'\n\nTODAY:\n'+$('context').value+'\n\nTRANSCRIPT:\n'+full.slice(-60000);
   var myw=epoch;

@@ -47,7 +47,7 @@ textarea{min-height:110px}
 </head>
 <body>
 <main>
-<h1>Meeting Sidekick <span style="font-weight:400">v14</span></h1>
+<h1>Meeting Sidekick <span style="font-weight:400">v15</span></h1>
 
 <div class="bar">
  <button id="startBtn" class="primary">Start listening</button>
@@ -436,6 +436,7 @@ textarea{min-height:110px}
   var full=segs.map(function(s){return s.text}).join(' ');
   if(!full || wrapBusy){ return; }
   if(auto && segs.length<=wrapSegCount){ return; }       // nothing new since the last wrap
+  if(auto && full.length<300){ return; }                 // too little speech to be a real call (for example just an error message heard by the mic)
   wrapBusy=true; wrapSegCount=segs.length;
   $('wrapBox').open=true; $('wrapOut').textContent=auto?'Auto-wrapping…':'Thinking…';
   var prompt='From this automatic transcript of a Teams meeting (it has errors and no speaker names), list ONLY what concerns the user named in the brief. '+
@@ -559,7 +560,7 @@ textarea{min-height:110px}
    .then(function(j){ pendingWrap=null; if(wrapSession) wrapSession.id=j.id; el.textContent='Wrap saved to Drive as '+w.name+' '+clock(Date.now())+'.'; })
    .catch(function(e){ el.textContent='Wrap not saved to Drive ('+e.message+'). Tap Reconnect Drive and approve, or use Copy.'; });
  }
- function text_ok(t){ return !!t && t.indexOf('Wrap failed')!==0 && t!=='Thinking…'; }
+ function text_ok(t){ return !!t && t.indexOf('Wrap failed')!==0 && t!=='Thinking…' && t.indexOf('Asked of the user')>-1 && t.indexOf('Commitments the user made')>-1; }   // a refusal or 'paste the transcript' reply is never saved
  $('driveBtn').onclick=function(){ connectDrive(function(){ syncBrief().then(flushWrap); },false); };
  $('driveWarn').onclick=function(){ connectDrive(function(){ syncBrief().then(flushWrap); },false); };
  // keep the sign-in and the brief fresh while listening: renew 5 minutes before the token ends, re-read the brief every 15 minutes

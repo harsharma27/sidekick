@@ -47,7 +47,7 @@ textarea{min-height:110px}
 </head>
 <body>
 <main>
-<h1>Meeting Sidekick <span style="font-weight:400">v13</span></h1>
+<h1>Meeting Sidekick <span style="font-weight:400">v14</span></h1>
 
 <div class="bar">
  <button id="startBtn" class="primary">Start listening</button>
@@ -426,14 +426,18 @@ textarea{min-height:110px}
   // one tap does everything: renew the Drive sign-in (no popup if already approved) and refresh the brief
   if(driveLive()) syncBrief(); else if($('gcid').value.trim()) connectDrive(syncBrief,true);
  };
- $('stopBtn').onclick=function(){ running=false; clearTimeout(retryTimerRec); clearStuck(); interimText=''; try{rec&&rec.stop()}catch(e){} if(wakeLock){try{wakeLock.release()}catch(e){}} setUI(); };
+ $('stopBtn').onclick=function(){ setTimeout(function(){ doWrap(true); },1500); running=false; clearTimeout(retryTimerRec); clearStuck(); interimText=''; try{rec&&rec.stop()}catch(e){} if(wakeLock){try{wakeLock.release()}catch(e){}} setUI(); };
  $('askBtn').onclick=function(){ fire('manual ask',true); };
  $('speakBtn').onclick=function(){ fire('speak',true,true,'speak'); };
 
- $('wrapBtn').onclick=function(){
+ var wrapBusy=false, wrapSegCount=0, wrapSession=null;   // wrapSession = {name,id}: one Drive file per listening session, updated by later wraps
+ $('wrapBtn').onclick=function(){ doWrap(false); };
+ function doWrap(auto){
   var full=segs.map(function(s){return s.text}).join(' ');
-  if(!full){ return; }
-  $('wrapBox').open=true; $('wrapOut').textContent='Thinking…';
+  if(!full || wrapBusy){ return; }
+  if(auto && segs.length<=wrapSegCount){ return; }       // nothing new since the last wrap
+  wrapBusy=true; wrapSegCount=segs.length;
+  $('wrapBox').open=true; $('wrapOut').textContent=auto?'Auto-wrapping…':'Thinking…';
   var prompt='From this automatic transcript of a Teams meeting (it has errors and no speaker names), list ONLY what concerns the user named in the brief. '+
    'RULES: Every item must come from something actually said in the TRANSCRIPT. Use the brief and today notes ONLY to understand names, stories and context, never as a source of items: if a sentence, commitment or follow-up appears in the brief but is not repeated in the transcript, leave it out. If the brief and the transcript disagree, report what the transcript says. '+
    'The transcript has no speaker labels. The phone sits with the user, so first-person promises in it ("leave it to me", "let me get back to", "I will", "I can take that") are probably the user\'s own: list them under Commitments the user made and add (verify speaker). Otherwise, if it is unclear who said something or who it is for, write (unclear who) instead of guessing a name. Do not claim something belongs to the user unless the transcript says so. '+
@@ -443,15 +447,15 @@ textarea{min-height:110px}
    'PROJECT BRIEF:\n'+$('brief').value+'\n\nTODAY:\n'+$('context').value+'\n\nTRANSCRIPT:\n'+full.slice(-60000);
   var myw=epoch;
   sample(prompt,{max:1200,timeout:WRAP_TIMEOUT_MS})
-   .then(function(r){ if(myw!==epoch) return; $('wrapOut').textContent=r.text; saveWrap(r.text)})
-   .catch(function(e){ if(myw!==epoch) return; $('wrapOut').textContent='Wrap failed ('+(e&&e.code||'error')+'): '+(e&&e.message||'')});
- };
+   .then(function(r){ wrapBusy=false; if(myw!==epoch) return; $('wrapOut').textContent=r.text; saveWrap(r.text)})
+   .catch(function(e){ wrapBusy=false; wrapSegCount=0; if(myw!==epoch) return; $('wrapOut').textContent='Wrap failed ('+(e&&e.code||'error')+'): '+(e&&e.message||'')});
+ }
  $('resetBtn').onclick=function(){
   epoch++; abortInflight(); queued=null; notesBusy=false; notesTry=0; notesAt=0; interimText='';
   clearTimeout(pending); pending=null; pendingReason=null; pendingStart=0; clearRetry();
   hear.audio=hear.sound=hear.text=0; segs.length=0; busy=false; lastName=0; lastCue=0; replies=0; lastHeard=running?Date.now():0;
   $('reply').classList.remove('hot'); $('replyText').textContent=INITIAL_REPLY; $('trigger').textContent='';
-  $('replyCount').textContent=0; $('wrapOut').textContent=INITIAL_WRAP; $('wrapSaved').textContent=''; pendingWrap=null; $('diag').textContent=''; hideWarn();
+  $('replyCount').textContent=0; $('wrapOut').textContent=INITIAL_WRAP; $('wrapSaved').textContent=''; pendingWrap=null; wrapSession=null; wrapSegCount=0; wrapBusy=false; $('diag').textContent=''; hideWarn();
   $('notesTopic').textContent='Start listening and notes appear here.'; $('notesList').textContent='';
   renderTranscript('');
   if(running) startRec();
@@ -532,7 +536,8 @@ textarea{min-height:110px}
  function pad2(n){ return (n<10?'0':'')+n; }
  function saveWrap(text){
   var d=new Date();
-  pendingWrap={ name:'wrap-'+d.getFullYear()+'-'+pad2(d.getMonth()+1)+'-'+pad2(d.getDate())+'-'+pad2(d.getHours())+pad2(d.getMinutes()), text:text };
+  if(!wrapSession) wrapSession={ name:'wrap-'+d.getFullYear()+'-'+pad2(d.getMonth()+1)+'-'+pad2(d.getDate())+'-'+pad2(d.getHours())+pad2(d.getMinutes()), id:null };
+  pendingWrap={ name:wrapSession.name, text:text };
   flushWrap();
  }
  function flushWrap(){
@@ -540,13 +545,18 @@ textarea{min-height:110px}
   var el=$('wrapSaved');
   if(!text_ok(w.text)){ pendingWrap=null; el.textContent=''; return Promise.resolve(); }
   if(!driveLive()){ el.textContent='Wrap not saved to Drive yet: tap Reconnect Drive and approve, it saves right after.'; return Promise.resolve(); }
+  if(wrapSession && wrapSession.id){        // later wrap in the same session: replace the contents of the same file
+   return fetch('https://www.googleapis.com/upload/drive/v3/files/'+wrapSession.id+'?uploadType=media',{method:'PATCH',headers:{Authorization:'Bearer '+gToken,'Content-Type':'text/plain; charset=UTF-8'},body:w.text})
+    .then(function(r){ if(!r.ok) throw new Error('HTTP '+r.status); pendingWrap=null; el.textContent='Wrap updated in Drive ('+w.name+') '+clock(Date.now())+'.'; })
+    .catch(function(e){ el.textContent='Wrap not updated in Drive ('+e.message+'). Tap Reconnect Drive and approve, or use Copy.'; });
+  }
   var folder=$('gfolder').value.trim();
   var meta={name:w.name, mimeType:'text/plain'}; if(folder) meta.parents=[folder];
   var b='sidekick_wrap_boundary';
   var body='--'+b+'\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n'+JSON.stringify(meta)+'\r\n--'+b+'\r\nContent-Type: text/plain; charset=UTF-8\r\n\r\n'+w.text+'\r\n--'+b+'--';
   return fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart',{method:'POST',headers:{Authorization:'Bearer '+gToken,'Content-Type':'multipart/related; boundary='+b},body:body})
    .then(function(r){ if(!r.ok) throw new Error('HTTP '+r.status); return r.json(); })
-   .then(function(){ pendingWrap=null; el.textContent='Wrap saved to Drive as '+w.name+'.'; })
+   .then(function(j){ pendingWrap=null; if(wrapSession) wrapSession.id=j.id; el.textContent='Wrap saved to Drive as '+w.name+' '+clock(Date.now())+'.'; })
    .catch(function(e){ el.textContent='Wrap not saved to Drive ('+e.message+'). Tap Reconnect Drive and approve, or use Copy.'; });
  }
  function text_ok(t){ return !!t && t.indexOf('Wrap failed')!==0 && t!=='Thinking…'; }
@@ -559,6 +569,7 @@ textarea{min-height:110px}
   else if(Date.now()-briefAt>15*60*1000){ syncBrief(); }
  },60*1000);
  setInterval(function(){
+  if(running && lastHeard && segs.length>wrapSegCount && Date.now()-lastHeard>10*60*1000) doWrap(true);   // 10 minutes of silence after speech: wrap and save
   if(running && lastHeard && Date.now()-lastHeard>90000) showWarn('No speech heard for 90 seconds. Check the mic, volume, or tap Stop then Start listening.');
  },15000);
  document.addEventListener('visibilitychange',function(){ if(document.visibilityState!=='visible' && running) showWarn('Screen was off or page in background: listening may have stopped. Check the transcript.'); });

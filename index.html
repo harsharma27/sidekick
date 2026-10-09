@@ -47,7 +47,7 @@ textarea{min-height:110px}
 </head>
 <body>
 <main>
-<h1>Meeting Sidekick <span style="font-weight:400">v15</span></h1>
+<h1>Meeting Sidekick <span style="font-weight:400">v16</span></h1>
 
 <div class="bar">
  <button id="startBtn" class="primary">Start listening</button>
@@ -122,7 +122,7 @@ textarea{min-height:110px}
  <div id="wrapSaved" style="font-size:13px;color:var(--muted);margin-top:6px"></div>
 </details>
 
-<p class="note">Nothing is stored after you close this page except the settings above. Speech-to-text runs through the phone browser. Replies come from Claude via your own API key, saved only in this browser on this phone.</p>
+<p class="note">Nothing is kept on the phone after you close this page except the settings above, but the wrap and the transcript of each listening session are saved to your Drive Sidekick folder. Speech-to-text runs through the phone browser. Replies come from Claude via your own API key, saved only in this browser on this phone.</p>
 </main>
 
 <script>
@@ -430,7 +430,7 @@ textarea{min-height:110px}
  $('askBtn').onclick=function(){ fire('manual ask',true); };
  $('speakBtn').onclick=function(){ fire('speak',true,true,'speak'); };
 
- var wrapBusy=false, wrapSegCount=0, wrapSession=null;   // wrapSession = {name,id}: one Drive file per listening session, updated by later wraps
+ var wrapBusy=false, wrapSegCount=0;   // one Drive wrap file and one transcript file per listening session, updated by later wraps
  $('wrapBtn').onclick=function(){ doWrap(false); };
  function doWrap(auto){
   var full=segs.map(function(s){return s.text}).join(' ');
@@ -449,14 +449,14 @@ textarea{min-height:110px}
   var myw=epoch;
   sample(prompt,{max:1200,timeout:WRAP_TIMEOUT_MS})
    .then(function(r){ wrapBusy=false; if(myw!==epoch) return; $('wrapOut').textContent=r.text; saveWrap(r.text)})
-   .catch(function(e){ wrapBusy=false; wrapSegCount=0; if(myw!==epoch) return; $('wrapOut').textContent='Wrap failed ('+(e&&e.code||'error')+'): '+(e&&e.message||'')});
+   .catch(function(e){ wrapBusy=false; wrapSegCount=0; saveTranscript(); if(myw!==epoch) return; $('wrapOut').textContent='Wrap failed ('+(e&&e.code||'error')+'): '+(e&&e.message||'')});
  }
  $('resetBtn').onclick=function(){
   epoch++; abortInflight(); queued=null; notesBusy=false; notesTry=0; notesAt=0; interimText='';
   clearTimeout(pending); pending=null; pendingReason=null; pendingStart=0; clearRetry();
   hear.audio=hear.sound=hear.text=0; segs.length=0; busy=false; lastName=0; lastCue=0; replies=0; lastHeard=running?Date.now():0;
   $('reply').classList.remove('hot'); $('replyText').textContent=INITIAL_REPLY; $('trigger').textContent='';
-  $('replyCount').textContent=0; $('wrapOut').textContent=INITIAL_WRAP; $('wrapSaved').textContent=''; pendingWrap=null; wrapSession=null; wrapSegCount=0; wrapBusy=false; $('diag').textContent=''; hideWarn();
+  $('replyCount').textContent=0; $('wrapOut').textContent=INITIAL_WRAP; $('wrapSaved').textContent=''; driveSlots={wrap:null,transcript:null}; driveStat={wrap:'',transcript:''}; sessionStamp=null; wrapSegCount=0; wrapBusy=false; $('diag').textContent=''; hideWarn();
   $('notesTopic').textContent='Start listening and notes appear here.'; $('notesList').textContent='';
   renderTranscript('');
   if(running) startRec();
@@ -532,37 +532,45 @@ textarea{min-height:110px}
    })
    .catch(function(e){ driveErr='sync failed ('+e.message+')'; setDriveStatus(); });
  }
- // ---------- Save the wrap to Drive so the daily tracker sweep can read it ----------
- var pendingWrap=null;
+ // ---------- Save the wrap and the transcript to Drive so the tracker sweep can read them ----------
+ var driveSlots={wrap:null,transcript:null}, driveStat={wrap:'',transcript:''}, sessionStamp=null;
  function pad2(n){ return (n<10?'0':'')+n; }
- function saveWrap(text){
-  var d=new Date();
-  if(!wrapSession) wrapSession={ name:'wrap-'+d.getFullYear()+'-'+pad2(d.getMonth()+1)+'-'+pad2(d.getDate())+'-'+pad2(d.getHours())+pad2(d.getMinutes()), id:null };
-  pendingWrap={ name:wrapSession.name, text:text };
-  flushWrap();
+ function renderStat(){ $('wrapSaved').textContent=[driveStat.wrap,driveStat.transcript].filter(Boolean).join(' '); }
+ function saveWrap(text){ saveSlot('wrap',text); saveTranscript(); }
+ function saveTranscript(){
+  var t=segs.map(function(x){ return '['+clock(x.t)+'] '+x.text; }).join('\n');
+  if(t.length<300) return;                              // too little speech to be a real call
+  saveSlot('transcript',t);
  }
- function flushWrap(){
-  var w=pendingWrap; if(!w) return Promise.resolve();
-  var el=$('wrapSaved');
-  if(!text_ok(w.text)){ pendingWrap=null; el.textContent=''; return Promise.resolve(); }
-  if(!driveLive()){ el.textContent='Wrap not saved to Drive yet: tap Reconnect Drive and approve, it saves right after.'; return Promise.resolve(); }
-  if(wrapSession && wrapSession.id){        // later wrap in the same session: replace the contents of the same file
-   return fetch('https://www.googleapis.com/upload/drive/v3/files/'+wrapSession.id+'?uploadType=media',{method:'PATCH',headers:{Authorization:'Bearer '+gToken,'Content-Type':'text/plain; charset=UTF-8'},body:w.text})
-    .then(function(r){ if(!r.ok) throw new Error('HTTP '+r.status); pendingWrap=null; el.textContent='Wrap updated in Drive ('+w.name+') '+clock(Date.now())+'.'; })
-    .catch(function(e){ el.textContent='Wrap not updated in Drive ('+e.message+'). Tap Reconnect Drive and approve, or use Copy.'; });
+ function saveSlot(kind,text){
+  if(!sessionStamp){ var d=new Date(); sessionStamp=d.getFullYear()+'-'+pad2(d.getMonth()+1)+'-'+pad2(d.getDate())+'-'+pad2(d.getHours())+pad2(d.getMinutes()); }
+  var slot=driveSlots[kind]; if(!slot) slot=driveSlots[kind]={ name:kind+'-'+sessionStamp, id:null, pending:null };
+  slot.pending=text; flushSlot(kind);
+ }
+ function flushAll(){ return Promise.all([flushSlot('wrap'),flushSlot('transcript')]); }
+ function flushSlot(kind){
+  var slot=driveSlots[kind]; if(!slot||slot.pending==null) return Promise.resolve();
+  if(kind==='wrap' && !text_ok(slot.pending)){ slot.pending=null; driveStat.wrap=''; renderStat(); return Promise.resolve(); }   // a refusal or 'paste the transcript' reply is never saved
+  if(!driveLive()){ driveStat[kind]=kind+' not saved to Drive yet: tap Reconnect Drive and approve, it saves right after.'; renderStat(); return Promise.resolve(); }
+  var text=slot.pending, label=(kind==='wrap'?'Wrap':'Transcript');
+  var fail=function(e){ driveStat[kind]=label+' not saved to Drive ('+e.message+'). Tap Reconnect Drive and approve.'; renderStat(); };
+  if(slot.id){       // later save in the same session: replace the contents of the same file
+   return fetch('https://www.googleapis.com/upload/drive/v3/files/'+slot.id+'?uploadType=media',{method:'PATCH',headers:{Authorization:'Bearer '+gToken,'Content-Type':'text/plain; charset=UTF-8'},body:text})
+    .then(function(r){ if(!r.ok) throw new Error('HTTP '+r.status); slot.pending=null; driveStat[kind]=label+' updated in Drive ('+slot.name+') '+clock(Date.now())+'.'; renderStat(); })
+    .catch(fail);
   }
   var folder=$('gfolder').value.trim();
-  var meta={name:w.name, mimeType:'text/plain'}; if(folder) meta.parents=[folder];
-  var b='sidekick_wrap_boundary';
-  var body='--'+b+'\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n'+JSON.stringify(meta)+'\r\n--'+b+'\r\nContent-Type: text/plain; charset=UTF-8\r\n\r\n'+w.text+'\r\n--'+b+'--';
+  var meta={name:slot.name, mimeType:'text/plain'}; if(folder) meta.parents=[folder];
+  var b='sidekick_boundary';
+  var body='--'+b+'\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n'+JSON.stringify(meta)+'\r\n--'+b+'\r\nContent-Type: text/plain; charset=UTF-8\r\n\r\n'+text+'\r\n--'+b+'--';
   return fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart',{method:'POST',headers:{Authorization:'Bearer '+gToken,'Content-Type':'multipart/related; boundary='+b},body:body})
    .then(function(r){ if(!r.ok) throw new Error('HTTP '+r.status); return r.json(); })
-   .then(function(j){ pendingWrap=null; if(wrapSession) wrapSession.id=j.id; el.textContent='Wrap saved to Drive as '+w.name+' '+clock(Date.now())+'.'; })
-   .catch(function(e){ el.textContent='Wrap not saved to Drive ('+e.message+'). Tap Reconnect Drive and approve, or use Copy.'; });
+   .then(function(j){ slot.id=j.id; slot.pending=null; driveStat[kind]=label+' saved to Drive as '+slot.name+' '+clock(Date.now())+'.'; renderStat(); })
+   .catch(fail);
  }
- function text_ok(t){ return !!t && t.indexOf('Wrap failed')!==0 && t!=='Thinking…' && t.indexOf('Asked of the user')>-1 && t.indexOf('Commitments the user made')>-1; }   // a refusal or 'paste the transcript' reply is never saved
- $('driveBtn').onclick=function(){ connectDrive(function(){ syncBrief().then(flushWrap); },false); };
- $('driveWarn').onclick=function(){ connectDrive(function(){ syncBrief().then(flushWrap); },false); };
+ function text_ok(t){ return !!t && t.indexOf('Wrap failed')!==0 && t!=='Thinking…' && t.toLowerCase().indexOf('asked of the user')>-1 && t.toLowerCase().indexOf('commitments the user made')>-1; }
+ $('driveBtn').onclick=function(){ connectDrive(function(){ syncBrief().then(flushAll); },false); };
+ $('driveWarn').onclick=function(){ connectDrive(function(){ syncBrief().then(flushAll); },false); };
  // keep the sign-in and the brief fresh while listening: renew 5 minutes before the token ends, re-read the brief every 15 minutes
  setInterval(function(){
   if(!running||!driveEver) return;

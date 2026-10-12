@@ -47,7 +47,7 @@ textarea{min-height:110px}
 </head>
 <body>
 <main>
-<h1>Meeting Sidekick <span style="font-weight:400">v16</span></h1>
+<h1>Meeting Sidekick <span style="font-weight:400">v17</span></h1>
 
 <div class="bar">
  <button id="startBtn" class="primary">Start listening</button>
@@ -107,6 +107,11 @@ textarea{min-height:110px}
   <textarea id="context"></textarea>
  </label>
  <button id="saveBtn" style="margin-top:8px">Save settings</button>
+</details>
+
+<details id="tlogBox">
+ <summary>Trigger log (<span id="tlogCount">0</span>)</summary>
+ <div id="tlog" style="font-family:'IBM Plex Mono',monospace;font-size:13px;white-space:pre-wrap;max-height:220px;overflow:auto;margin-top:6px">Every time your name, a story or a cue is heard, it is listed here with what happened.</div>
 </details>
 
 <details>
@@ -197,6 +202,26 @@ textarea{min-height:110px}
  function ago(t){ if(!t) return 'never'; var s=Math.round((Date.now()-t)/1000); return s<90?s+'s ago':Math.round(s/60)+' min ago'; }
  function clock(t){ return new Date(t).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}); }
 
+ // ---------- trigger log: every hit and what happened to it ----------
+ var tlog=[], lastHitText='', lastLogKey='', lastLogAt=0;
+ function snip(t,word){
+  t=(t||'').replace(/\s+/g,' ').trim(); if(!t) return '';
+  var i=word?t.toLowerCase().indexOf(word.toLowerCase()):-1;
+  if(i<0||t.length<=140) return t.length>140?t.slice(-140):t;
+  var a=Math.max(0,i-70), b=Math.min(t.length,i+70);
+  return (a>0?'…':'')+t.slice(a,b)+(b<t.length?'…':'');
+ }
+ function logT(reason,outcome,detail){
+  var key=reason+'|'+outcome, now=Date.now();
+  if(outcome==='heard' && key===lastLogKey && now-lastLogAt<15000) return;   // the same word repeated in interim text is one hit
+  lastLogKey=key; lastLogAt=now;
+  var d=new Date(), ts=pad2(d.getHours())+':'+pad2(d.getMinutes())+':'+pad2(d.getSeconds());
+  tlog.push(ts+'  '+reason+'  →  '+outcome+(detail?('  |  '+detail):''));
+  if(tlog.length>60) tlog.shift();
+  $('tlog').textContent=tlog.slice().reverse().join('\n'); $('tlogCount').textContent=tlog.length;
+ }
+ function hitWord(reason){ return (reason||'').replace(/^[^:]*:\s*/,''); }
+
  // ---------- triggers: your name, your stories, cue phrases ----------
  var pending=null, pendingReason=null, pendingStart=0;
  function schedule(reason){
@@ -219,7 +244,7 @@ textarea{min-height:110px}
   list($('names').value).forEach(function(n){
    if(hit) return;
    if(low.indexOf(' '+n+' ')>-1){ hit='name: '+n; return; }
-   if(n.indexOf(' ')<0 && n.length>=4){ words.forEach(function(w){ if(!hit && w.length>=4 && w!==n && edit1(w,n)) hit='name (close): '+w; }); }
+   if(n.indexOf(' ')<0 && n.length>=5){ words.forEach(function(w){ if(!hit && w.length>=4 && w!==n && edit1(w,n)) hit='name (close): '+w; }); }   // 4-letter names (hash, hush) match exactly only, or "cash" and "wash" fire
   });
   if(!hit){ list($('stories').value).forEach(function(n){ var d=n.replace(/\D/g,''); if(d && !hit && low.replace(/ /g,'').indexOf(d)>-1) hit='story: '+d; }); }
   if(!hit){
@@ -227,6 +252,8 @@ textarea{min-height:110px}
    cues.forEach(function(c){ if(!hit && low.indexOf(' '+c+' ')>-1) hit='cue: '+c; });
   }
   if(hit){
+   if(!pending) lastHitText=text;      // keep the sentence of the hit that will actually be answered
+   logT(hit,'heard',snip(text,hitWord(hit)));
    // show at once that something was heard, before any waiting
    if(!isCue(hit) && Date.now()-lastName>=NAME_COOLDOWN){
     $('reply').classList.add('hot');
@@ -247,7 +274,7 @@ textarea{min-height:110px}
   retryTimer=setTimeout(expireRetry,Math.max(0,THIN_WAIT_MS-(Date.now()-since)));
  }
  function expireRetry(){
-  if(!retry) return; var r=retry.reason, n=wordCount(WINDOW_MS); clearRetry();
+  if(!retry) return; var r=retry.reason, n=wordCount(WINDOW_MS); clearRetry(); logT(r,'dropped','only '+plural(n)+' after waiting');
   $('replyText').textContent='Heard '+r+', but only '+plural(n)+' after '+Math.round(THIN_WAIT_MS/1000)+' seconds - not enough to answer. Tap Ask now if you want a reply.';
  }
  function recheckRetry(){
@@ -265,25 +292,27 @@ textarea{min-height:110px}
   'You help the user (named in the context) during a live work call. '+
   'Below are the last two minutes of an automatic transcript (it has errors, no speaker names, and the newest words are last) and his current context. '+
   'The TRANSCRIPT is newer than the PROJECT BRIEF: when they disagree about timing, owners or decisions, the transcript is right and the brief is out of date. '+
-  'The phone sits with the user, so in a one-to-one or small call any line addressed to "you", "Harsh" (or a misheard version) or "the BSA" (for example "you need to check...", "you take the screenshot", "can you share...") is HIS task or question, even when most of the topic belongs to other people. A thing another person says they will do themselves ("I will check with X") is theirs, not his. ';
+  'The phone sits with the user, so in a one-to-one or small call any line addressed to "you", "Harsh" (or a misheard version) or "the BSA" (for example "you need to check...", "you take the screenshot", "can you share...") is HIS task or question, even when most of the topic belongs to other people. A thing another person says they will do themselves ("I will check with X") is theirs, not his. '+
+  'The phone also hears the user\'s OWN voice, so some first-person lines ("I sent it", "I will check") may be him talking; a question asked right after his own update is usually for him. ';
 
  // mode: 'trigger' (name/story/cue/Ask now) or 'speak' (I want to speak)
  function fire(reason,manual,force,mode){
   var now=Date.now(); mode=mode||'trigger';
-  if(busy){ if(!manual) queued=reason; return; }          // a name hit during a running request is kept and answered next
+  if(busy){ if(!manual){ queued=reason; logT(reason,'queued','a reply was already being fetched'); } return; }          // a name hit during a running request is kept and answered next
   var cue=isCue(reason);
   if(!manual && !force){
-   if(cue){ if(now-Math.max(lastName,lastCue)<COOLDOWN) return; }
-   else { if(now-lastName<NAME_COOLDOWN) return; }
+   if(cue){ if(now-Math.max(lastName,lastCue)<COOLDOWN){ logT(reason,'skipped','cue cooldown'); return; } }
+   else { if(now-lastName<NAME_COOLDOWN){ logT(reason,'skipped','answered '+Math.round((now-lastName)/1000)+'s ago'); return; } }
   }
   var n=wordCount(WINDOW_MS);
   if(manual){
    var minM=(mode==='speak')?MIN_WORDS_SPEAK:MIN_WORDS_MANUAL;
-   if(n<minM){ $('replyText').textContent='Not enough speech yet ('+plural(n)+' in the last 2 minutes, need at least '+minM+'). Keep listening, then try again.'; return; }
+   if(n<minM){ $('replyText').textContent='Not enough speech yet ('+plural(n)+' in the last 2 minutes, need at least '+minM+'). Keep listening, then try again.'; logT(reason,'skipped','only '+plural(n)); return; }
   } else if(!force){
    var need=cue?MIN_WORDS_AUTO:MIN_WORDS_NAME;
-   if(n<need){ startRetry(reason,need); return; }
+   if(n<need){ logT(reason,'waiting','only '+plural(n)); startRetry(reason,need); return; }
   }
+  var hitText=(mode==='speak'||reason==='manual ask')?'':lastHitText;
   clearRetry();
   if(!manual){ if(cue) lastCue=now; else lastName=now; }
   busy=true; var my=epoch;
@@ -301,16 +330,31 @@ textarea{min-height:110px}
   } else {
    prompt=COMMON+
     'If the user\'s name (or a misheard version of it) appears just before or after a question or request, treat that question as directed at them. If someone is asking the user something or it is their turn, reply with ONE or TWO short spoken sentences they can say: plain, friendly, junior tone, no jargon beyond what the call used, never promise dates or decisions that belong to others. '+
-    'This was triggered because the user\'s name, one of their work items or a cue phrase was just heard ('+reason+'), which does not mean anyone asked them anything. Only answer if the transcript contains a real question or request for the user (a direct question, a request for an update, or their name followed by a request). If there is none, reply with exactly: Nothing for you. Do not invent a question, do not summarise the call, and do not give a status line unless asked for one. If a question is directed at them but the transcript is garbled, reply with one short line asking them to repeat it.\n\n';
+    'This was triggered because the user\'s name, one of their work items or a cue phrase was just heard ('+reason+') in this sentence: "'+snip(hitText,hitWord(reason))+'". '+
+    'Answer when ANY of these is true in the last part of the transcript: a question or request sits in the same or next sentence as his name, a story number of his, or "you"; someone asks for an update, status, help or confirmation; or the call looks like a one-to-one or small call and a question was just asked. When answering, use his items in the PROJECT BRIEF and TODAY notes to give a concrete status or answer, or if the answer is not in the notes, a short honest holding line ("Let me check and post it in the chat"). '+
+    'Reply with exactly: Nothing for you ONLY when his name or item was mentioned in passing (for example someone else\'s update that just names him) and nothing is asked of him. Do not invent a question, do not summarise the call. If a question is directed at him but the transcript is garbled, reply with one short line asking them to repeat it.\n\n';
   }
   prompt+='PROJECT BRIEF:\n'+$('brief').value+'\n\nTODAY:\n'+$('context').value+'\n\nTRANSCRIPT:\n'+recentText(WINDOW_MS);
   sample(prompt,{max:250})
    .then(function(r){ if(my!==epoch) return;
      var t=(r.text||'').trim(); replies++; $('replyCount').textContent=replies;
-     if(mode!=='speak' && /^nothing for you/i.test(t)){ $('replyText').textContent='Nothing asked of you right now.'; setTimeout(function(){ if(!busy) $('reply').classList.remove('hot'); },4000); }
-     else { $('replyText').textContent=t; if(navigator.vibrate) navigator.vibrate(200); }   // stays highlighted until Dismiss
+     if(mode!=='speak' && /^nothing for you/i.test(t)){
+      if(!manual && !cue && hitText){
+       // a name or story hit never ends silently: show what was heard and the best live-notes line, so he can judge for himself
+       var nl=''; try{ var li=$('notesList').querySelector('li'); nl=li?(li.textContent||''):''; }catch(e){}
+       if(/^nothing of yours/i.test(nl)) nl='';
+       $('replyText').textContent='Heard "'+hitWord(reason)+'": '+snip(hitText,hitWord(reason))+(nl?('\n\nNote: '+nl):'');
+       $('trigger').textContent='Claude saw no question for you in this ('+clock(Date.now())+'). Tap Ask now or I want to speak if it was for you.';
+       if(navigator.vibrate) navigator.vibrate(150);
+       logT(reason,'shown, no question seen',snip(hitText,hitWord(reason)));
+      } else {
+       $('replyText').textContent='Nothing asked of you right now.'; setTimeout(function(){ if(!busy) $('reply').classList.remove('hot'); },4000);
+       logT(reason,'nothing for you','');
+      }
+     }
+     else { $('replyText').textContent=t; if(navigator.vibrate) navigator.vibrate(200); logT(reason,'replied',t.slice(0,120)); }   // stays highlighted until Dismiss
    })
-   .catch(function(e){ if(my!==epoch) return; $('replyText').textContent='No reply ('+(e&&e.code||'error')+'): '+(e&&e.message||'');  })
+   .catch(function(e){ if(my!==epoch) return; $('replyText').textContent='No reply ('+(e&&e.code||'error')+'): '+(e&&e.message||''); logT(reason,'error',(e&&e.code||'error')+' '+(e&&e.message||'')); })
    .then(function(){ if(my!==epoch) return; busy=false; if(queued){ var q=queued; queued=null; fire(q,false,true); } });
  }
  $('dismissBtn').onclick=function(){ $('reply').classList.remove('hot'); $('replyText').textContent=INITIAL_REPLY; $('trigger').textContent=''; };
@@ -448,7 +492,8 @@ textarea{min-height:110px}
    'THE USER\'S NAME AND MISHEARINGS: Harsh, Harsha, Horsham, Hash, Hush, Harsh Sharma'+($('names').value?', '+$('names').value:'')+'. A line addressed to any of these, or to "you" while the user is on the call, is addressed to the user, even if the rest of the sentence is garbled. A request such as "can you follow up", "maybe you can check" or "is Harsh on that email" is an Asked of the user item, and an answer such as "okay", "sounds good" or "sure" right after it is a Commitment (verify speaker). '+
    'If a follow-up request is present but the person it is for is unclear, list it as (unclear who) instead of dropping it; only write Nothing for you under a section when the transcript really contains nothing for it. '+
    'LIVE NOTES CANDIDATES: the lines below were flagged during the call. Treat each Yours: or ASKED: line as a candidate only. Keep it ONLY if you can point to words in the transcript (the same names, story numbers or action) that say it; if the candidate matches only the brief or today notes, drop it. Never add detail that is not in the transcript.\n'+liveNotesText()+'\n'+
-   'Sections: Asked of the user; Commitments the user made; Decisions affecting their work; Follow-ups they might send (a follow-up for each commitment, naming who it goes to). Plain short lines, no filler. If a section has nothing, write Nothing for you under it.\n\n'+
+   'ASKED OF THE USER is strict: list an item there ONLY when the same or next line contains his name (or a mishearing), one of his story numbers, or "you" in a one-to-one call. Other people\'s status updates (QA, automation, testing progress, scripts, capacity, another team\'s tasks, closing their own sub-tasks) go under Team updates, never under Asked of the user, even if he might find them useful.\n'+
+   'Sections: Asked of the user; Commitments the user made; Decisions affecting their work; Follow-ups they might send (a follow-up for each commitment, naming who it goes to); Team updates (not his, one line each). Plain short lines, no filler. If a section has nothing, write Nothing for you under it.\n\n'+
    'PROJECT BRIEF:\n'+$('brief').value+'\n\nTODAY:\n'+$('context').value+'\n\nTRANSCRIPT:\n'+full.slice(-60000);
   var myw=epoch;
   sample(prompt,{max:1200,timeout:WRAP_TIMEOUT_MS})
@@ -462,6 +507,7 @@ textarea{min-height:110px}
   $('reply').classList.remove('hot'); $('replyText').textContent=INITIAL_REPLY; $('trigger').textContent='';
   $('replyCount').textContent=0; $('wrapOut').textContent=INITIAL_WRAP; $('wrapSaved').textContent=''; driveSlots={wrap:null,transcript:null}; driveStat={wrap:'',transcript:''}; sessionStamp=null; wrapSegCount=0; wrapBusy=false; $('diag').textContent=''; hideWarn();
   $('notesTopic').textContent='Start listening and notes appear here.'; $('notesList').textContent='';
+  tlog=[]; lastLogKey=''; lastHitText=''; $('tlog').textContent=''; $('tlogCount').textContent=0;
   renderTranscript('');
   if(running) startRec();
   setUI();
@@ -544,6 +590,7 @@ textarea{min-height:110px}
  function saveTranscript(){
   var t=segs.map(function(x){ return '['+clock(x.t)+'] '+x.text; }).join('\n');
   if(t.length<300) return;                              // too little speech to be a real call
+  if(tlog.length) t+='\n\n--- trigger log (Sidekick v17) ---\n'+tlog.join('\n');
   saveSlot('transcript',t);
  }
  function saveSlot(kind,text){

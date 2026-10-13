@@ -47,7 +47,7 @@ textarea{min-height:110px}
 </head>
 <body>
 <main>
-<h1>Meeting Sidekick <span style="font-weight:400">v17</span></h1>
+<h1>Meeting Sidekick <span style="font-weight:400">v18</span></h1>
 
 <div class="bar">
  <button id="startBtn" class="primary">Start listening</button>
@@ -70,7 +70,7 @@ textarea{min-height:110px}
 
 <div id="reply">
  <div class="head"><div class="label">Say this</div><button id="dismissBtn">Dismiss</button></div>
- <div class="text" id="replyText">Waiting. A reply appears here when your name, one of your stories, or a question to you comes up, or when you tap I want to speak.</div>
+ <div class="text" id="replyText">Waiting. A reply appears when there is a useful reason for you to speak now, or when you tap I want to speak.</div>
  <div id="trigger"></div>
 </div>
 
@@ -111,7 +111,7 @@ textarea{min-height:110px}
 
 <details id="tlogBox">
  <summary>Trigger log (<span id="tlogCount">0</span>)</summary>
- <div id="tlog" style="font-family:'IBM Plex Mono',monospace;font-size:13px;white-space:pre-wrap;max-height:220px;overflow:auto;margin-top:6px">Every time your name, a story or a cue is heard, it is listed here with what happened.</div>
+ <div id="tlog" style="font-family:'IBM Plex Mono',monospace;font-size:13px;white-space:pre-wrap;max-height:220px;overflow:auto;margin-top:6px">Speaking-cue checks are listed here with what happened.</div>
 </details>
 
 <details>
@@ -154,6 +154,8 @@ textarea{min-height:110px}
  var NOTES_EVERY_MS=20000;   // notes refresh at most this often, and only when there is new speech
  var briefAt=0, errLog=[], errStreak=0, retryTimerRec=null;              // when the brief was last synced from Drive (or typed in)
  var notesOn=true, notesBusy=false, notesTry=0, notesAt=0;
+  var semanticBusy=false, semanticAt=0, semanticLastText='', semanticLastReply='', semanticLastReplyAt=0;
+  var SEMANTIC_EVERY_MS=8000, SEMANTIC_WINDOW_MS=70000, SEMANTIC_REPLY_COOLDOWN=18000;
 
  // ---------- settings ----------
  function load(){try{
@@ -248,7 +250,8 @@ textarea{min-height:110px}
   });
   if(!hit){ list($('stories').value).forEach(function(n){ var d=n.replace(/\D/g,''); if(d && !hit && low.replace(/ /g,'').indexOf(d)>-1) hit='story: '+d; }); }
   if(!hit){
-   var cues=['your thoughts','any update','any updates','what do you think','over to you','anything from you','your side'];
+   var cues=['your thoughts','any update','any updates','what do you think','over to you','anything from you','your side',
+      'did we review','have we reviewed','did we already','have we already','did we go through','did we cover','were these reviewed'];
    cues.forEach(function(c){ if(!hit && low.indexOf(' '+c+' ')>-1) hit='cue: '+c; });
   }
   if(hit){
@@ -289,11 +292,55 @@ textarea{min-height:110px}
  }
 
  var COMMON=
-  'You help the user (named in the context) during a live work call. '+
-  'Below are the last two minutes of an automatic transcript (it has errors, no speaker names, and the newest words are last) and his current context. '+
-  'The TRANSCRIPT is newer than the PROJECT BRIEF: when they disagree about timing, owners or decisions, the transcript is right and the brief is out of date. '+
-  'The phone sits with the user, so in a one-to-one or small call any line addressed to "you", "Harsh" (or a misheard version) or "the BSA" (for example "you need to check...", "you take the screenshot", "can you share...") is HIS task or question, even when most of the topic belongs to other people. A thing another person says they will do themselves ("I will check with X") is theirs, not his. '+
-  'The phone also hears the user\'s OWN voice, so some first-person lines ("I sent it", "I will check") may be him talking; a question asked right after his own update is usually for him. ';
+  'You help Harsh during a live CMCM Field Service work call. '+
+  'Below is an automatic transcript with errors and no speaker labels; newest words are last. '+
+  'The live transcript is newer than the PROJECT BRIEF for facts stated on this call. The brief is useful verified history, but never turn an old note into current status if the call does not support it. '+
+  'The phone hears every speaker, including Harsh. Do not assume a first-person promise belongs to Harsh unless the surrounding words address him or clearly concern his owned work. '+
+  'Stay in Harsh\'s BSA lane: answer or clarify functional scope and verified history, but do not volunteer him for dev, QA, test execution, root-cause diagnosis, or another owner\'s decision. '+
+  'The core question is not whether his name or story was mentioned. The core question is whether speaking NOW would add useful information, answer an ask, prevent rework or mistake, clarify Harsh-owned work, or protect his ownership. ';
+
+ // v18 semantic gate: evaluate the conversation itself, not just names/story numbers.
+ function semanticWindow(){ return recentText(SEMANTIC_WINDOW_MS); }
+ function semanticDecision(){
+  if(!running||semanticBusy||busy) return;
+  var now=Date.now(), tr=semanticWindow();
+  if(now-semanticAt<SEMANTIC_EVERY_MS) return;
+  if(tr.split(/\s+/).filter(Boolean).length<12) return;
+  if(tr===semanticLastText) return;
+  semanticAt=now; semanticLastText=tr; semanticBusy=true; var my=epoch;
+  var prompt=COMMON+
+   'Decide whether Harsh should speak RIGHT NOW. Trigger only for a useful intervention. HIGH priority: '+
+   '(1) a direct ask to Harsh; (2) a group question Harsh can answer from verified brief or history, especially if it prevents repeating work already done; '+
+   '(3) a Harsh-owned commitment, date, scope, or action is about to be assigned or assumed; '+
+   '(4) the current discussion materially conflicts with verified brief evidence and correcting it now prevents a wrong action; '+
+   '(5) Harsh can close an open item with one short verified fact. '+
+   'Do NOT trigger for casual name mentions, praise, jokes, story numbers with no ask, PO/dev/QA technical discussion, questions already answered by someone else, '+
+   'generic just-to-confirm repetition, low-value summaries, or actions clearly owned by someone else. '+
+   'If you trigger, output exactly one line beginning SAY: followed by one or two short spoken sentences in Harsh\'s junior, factual voice. '+
+   'If there is no useful reason to speak, output exactly NOTHING. '+
+   'Never invent status, dates, owners, root cause, or current Jira state. If the brief only gives historical evidence, qualify it as I think or From the last review.\n\n'+
+   'PROJECT BRIEF:\n'+$('brief').value+'\n\nTODAY:\n'+$('context').value+'\n\nTRANSCRIPT:\n'+tr;
+  sample(prompt,{max:180})
+   .then(function(r){ if(my!==epoch) return;
+     var v=(r.text||'').trim();
+     if(/^say\s*:/i.test(v)){
+      var line=v.replace(/^say\s*:\s*/i,'').trim();
+      if(semanticLastReply && Date.now()-semanticLastReplyAt<SEMANTIC_REPLY_COOLDOWN && similar(semanticLastReply.toLowerCase(),line.toLowerCase())>=0.72){
+       logT('semantic','skipped','similar recent cue'); return;
+      }
+      semanticLastReply=line; semanticLastReplyAt=Date.now();
+      replies++; $('replyCount').textContent=replies;
+      $('reply').classList.add('hot'); $('replyText').textContent=line;
+      $('trigger').textContent='Useful speaking moment detected at '+new Date().toLocaleTimeString();
+      if(navigator.vibrate) navigator.vibrate(180);
+      logT('semantic','replied',line.slice(0,120));
+     } else {
+      logT('semantic','nothing for you','');
+     }
+   })
+   .catch(function(e){ if(my!==epoch) return; logT('semantic','error',(e&&e.code||'error')+' '+(e&&e.message||'')); })
+   .then(function(){ semanticBusy=false; });
+ }
 
  // mode: 'trigger' (name/story/cue/Ask now) or 'speak' (I want to speak)
  function fire(reason,manual,force,mode){
@@ -329,10 +376,11 @@ textarea{min-height:110px}
     'Plain, friendly, junior tone. Never invent facts, dates or decisions that are not in the transcript, the brief or the today notes, and never promise anything that belongs to others. Output only the sentence.\n\n';
   } else {
    prompt=COMMON+
-    'If the user\'s name (or a misheard version of it) appears just before or after a question or request, treat that question as directed at them. If someone is asking the user something or it is their turn, reply with ONE or TWO short spoken sentences they can say: plain, friendly, junior tone, no jargon beyond what the call used, never promise dates or decisions that belong to others. '+
-    'This was triggered because the user\'s name, one of their work items or a cue phrase was just heard ('+reason+') in this sentence: "'+snip(hitText,hitWord(reason))+'". '+
-    'Answer when ANY of these is true in the last part of the transcript: a question or request sits in the same or next sentence as his name, a story number of his, or "you"; someone asks for an update, status, help or confirmation; or the call looks like a one-to-one or small call and a question was just asked. When answering, use his items in the PROJECT BRIEF and TODAY notes to give a concrete status or answer, or if the answer is not in the notes, a short honest holding line ("Let me check and post it in the chat"). '+
-    'Reply with exactly: Nothing for you ONLY when his name or item was mentioned in passing (for example someone else\'s update that just names him) and nothing is asked of him. Do not invent a question, do not summarise the call. If a question is directed at him but the transcript is garbled, reply with one short line asking them to repeat it.\n\n';
+    'A lexical trigger was heard ('+reason+') in this sentence: "'+snip(hitText,hitWord(reason))+'". Decide whether Harsh actually needs to speak now. '+
+    'Reply with ONE or TWO short spoken sentences only when there is a direct ask, a useful verified status or history answer, a Harsh-owned commitment or decision to protect, or a material correction that prevents rework. '+
+    'Do not answer merely because his name or story was mentioned. Do not repeat a question already answered by someone else. Do not volunteer Harsh for another owner\'s task. '+
+    'If the answer is not supported by transcript, brief or today notes, use a short honest holding line rather than inventing it. '+
+    'Reply with exactly: Nothing for you when the mention is casual or there is no useful reason for him to speak. If a direct question is garbled, ask them to repeat it.\n\n';
   }
   prompt+='PROJECT BRIEF:\n'+$('brief').value+'\n\nTODAY:\n'+$('context').value+'\n\nTRANSCRIPT:\n'+recentText(WINDOW_MS);
   sample(prompt,{max:250})
@@ -378,10 +426,13 @@ textarea{min-height:110px}
   var prompt=COMMON+
    'Act as his live prompter. Output exactly this shape and nothing else:\n'+
    'TOPIC: <3 to 6 words naming what is being discussed right now>\n'+
-   '- up to 3 lines, each at most 20 words, each something the user could say or ask on this topic that comes from the PROJECT BRIEF or TODAY notes (his status, his open ask, who owes what, a date already in the notes).\n'+
-   'If it sounds like someone is asking him something, make the first line start with ASKED: and give a one-line answer he can say. If someone just told him to do or check something, add a line starting Yours: that states the task in plain words with who said it if known.\n'+
-   'If a decision, order, date or owner was just stated, make one line a read-back he can confirm, starting "Confirm:". '+
-   'Every line must be concrete (a story number, a name, a date or a decision). Never write filler such as "let me know if anything else comes up". Never invent facts or dates. If the transcript and the brief disagree, use the transcript. Output the single line - Nothing of yours on this topic ONLY if nothing in the transcript is addressed to him or assigned to him AND nothing in the brief or today notes touches the topic; otherwise give at least the Yours: or Confirm: line\n\n'+
+   '- up to 3 lines, each at most 20 words, each something Harsh could use on this topic from the PROJECT BRIEF or TODAY notes.\n'+
+   'If it sounds like someone is asking him something, make the first line start with ASKED: and give a one-line answer he can say. '+
+   'If someone just told him to do or check something, add a line starting Yours: only when that task actually belongs to Harsh. '+
+   'Only add a Confirm: line when a decision, date, scope or owner materially affects Harsh\'s own work or confirming it would prevent rework. Do not create generic read-backs. '+
+   'Do not manufacture a speaking point just because his name, a story, or FS was mentioned. Do not volunteer him for PO/dev/QA/test work. '+
+   'Every line must be concrete and supported. Never invent facts or dates. If the transcript and brief disagree, use the transcript for this call. '+
+   'Output the single line Nothing of yours on this topic when Harsh has no useful contribution or action.\n\n'+
    'PROJECT BRIEF:\n'+$('brief').value+'\n\nTODAY:\n'+$('context').value+'\n\nTRANSCRIPT:\n'+recentText(WINDOW_MS);
   sample(prompt,{max:320})
    .then(function(r){ if(my!==epoch) return; renderNotes(r.text); notesAt=Date.now(); })
@@ -419,7 +470,7 @@ textarea{min-height:110px}
       else if(last && (ll.indexOf(tl)>-1)){ /* repeat already captured, skip */ }
       else if(last && Date.now()-last.t<20000 && similar(ll,tl)>=0.6){ if(tl.length>ll.length){ last.text=t; } last.t=Date.now(); }
       else { segs.push({t:Date.now(),text:t}); }
-      checkTrigger(t); } }
+      checkTrigger(t); setTimeout(semanticDecision,650); } }
     else interim+=r[0].transcript;
    }
    interimText=interim.trim();
@@ -465,7 +516,7 @@ textarea{min-height:110px}
  document.addEventListener('visibilitychange',function(){ if(document.visibilityState==='visible' && running) keepAwake(); });
 
  $('startBtn').onclick=function(){
-  clearStuck(); lastHeard=Date.now(); hideWarn(); epoch++; notesTry=0; notesAt=0;
+  clearStuck(); lastHeard=Date.now(); hideWarn(); epoch++; notesTry=0; notesAt=0; semanticBusy=false; semanticAt=0; semanticLastText=''; semanticLastReply=''; semanticLastReplyAt=0;
   running=true; setUI(); keepAwake(); startRec();
   // one tap does everything: renew the Drive sign-in (no popup if already approved) and refresh the brief
   if(driveLive()) syncBrief(); else if($('gcid').value.trim()) connectDrive(syncBrief,true);
@@ -503,7 +554,7 @@ textarea{min-height:110px}
  $('resetBtn').onclick=function(){
   epoch++; abortInflight(); queued=null; notesBusy=false; notesTry=0; notesAt=0; interimText='';
   clearTimeout(pending); pending=null; pendingReason=null; pendingStart=0; clearRetry();
-  hear.audio=hear.sound=hear.text=0; segs.length=0; busy=false; lastName=0; lastCue=0; replies=0; lastHeard=running?Date.now():0;
+  hear.audio=hear.sound=hear.text=0; segs.length=0; busy=false; lastName=0; lastCue=0; replies=0; lastHeard=running?Date.now():0; semanticBusy=false; semanticAt=0; semanticLastText=''; semanticLastReply=''; semanticLastReplyAt=0;
   $('reply').classList.remove('hot'); $('replyText').textContent=INITIAL_REPLY; $('trigger').textContent='';
   $('replyCount').textContent=0; $('wrapOut').textContent=INITIAL_WRAP; $('wrapSaved').textContent=''; driveSlots={wrap:null,transcript:null}; driveStat={wrap:'',transcript:''}; sessionStamp=null; wrapSegCount=0; wrapBusy=false; $('diag').textContent=''; hideWarn();
   $('notesTopic').textContent='Start listening and notes appear here.'; $('notesList').textContent='';
@@ -590,7 +641,7 @@ textarea{min-height:110px}
  function saveTranscript(){
   var t=segs.map(function(x){ return '['+clock(x.t)+'] '+x.text; }).join('\n');
   if(t.length<300) return;                              // too little speech to be a real call
-  if(tlog.length) t+='\n\n--- trigger log (Sidekick v17) ---\n'+tlog.join('\n');
+  if(tlog.length) t+='\n\n--- trigger log (Sidekick v18) ---\n'+tlog.join('\n');
   saveSlot('transcript',t);
  }
  function saveSlot(kind,text){

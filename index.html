@@ -47,7 +47,7 @@ textarea{min-height:110px}
 </head>
 <body>
 <main>
-<h1>Meeting Sidekick <span style="font-weight:400">v19</span></h1>
+<h1>Meeting Sidekick <span style="font-weight:400">v20</span></h1>
 
 <div class="bar">
  <button id="startBtn" class="primary">Start listening</button>
@@ -152,7 +152,7 @@ textarea{min-height:110px}
  var THIN_WAIT_MS=60000;
  var REQ_TIMEOUT_MS=25000, WRAP_TIMEOUT_MS=60000;
  var NOTES_EVERY_MS=30000;   // notes refresh at most this often, and only when there is new speech
- var briefAt=0, errLog=[], errStreak=0, retryTimerRec=null;              // when the brief was last synced from Drive (or typed in)
+ var briefAt=0, errLog=[], errStreak=0, retryTimerRec=null, sessionSpeechErrors=0, sessionRestarts=0;              // when the brief was last synced from Drive (or typed in)
  var notesOn=true, notesBusy=false, notesTry=0, notesAt=0;
  var semanticBusy=false, semanticAt=0, semanticLastText='', semanticLastReply='', semanticLastReplyAt=0;
  var SEMANTIC_EVERY_MS=15000, SEMANTIC_WINDOW_MS=70000, SEMANTIC_REPLY_COOLDOWN=18000;
@@ -438,14 +438,16 @@ textarea{min-height:110px}
   var prompt=COMMON+
    'Act as his live prompter. Output exactly this shape and nothing else:\n'+
    'TOPIC: <3 to 6 words naming what is being discussed right now>\n'+
-   '- up to 3 lines, each at most 20 words, each something Harsh could use on this topic from the PROJECT BRIEF or TODAY notes.\n'+
-   'If it sounds like someone is asking him something, make the first line start with ASKED: and give a one-line answer he can say. '+
-   'If someone just told him to do or check something, add a line starting Yours: only when that task actually belongs to Harsh. '+
-   'Only add a Confirm: line when a decision, date, scope or owner materially affects Harsh\'s own work or confirming it would prevent rework. Do not create generic read-backs. '+
-   'Do not manufacture a speaking point just because his name, a story, or FS was mentioned. Do not volunteer him for PO/dev/QA/test work. '+
-   'Every line must be concrete and supported. Never invent facts or dates. If the transcript and brief disagree, use the transcript for this call. '+
+   '- up to 3 lines, each at most 20 words.\n'+
+   'EVIDENCE LOCK: every note line must be directly supported by words in TRANSCRIPT. PROJECT BRIEF and TODAY are context-only for recognizing names/story numbers; do not import a fact, owner, date, package, dependency, next step or technical label from them. '+
+   'Do not combine separate transcript fragments into a new plan or inferred ownership. Do not turn a plausible interpretation into a fact. '+
+   'If a package name, acronym, system, owner, date, sequence or technical noun is garbled or ambiguous, quote the shortest wording as heard and add (as heard), or omit it. Never normalize it to a likely term. '+
+   'If the transcript clearly asks Harsh by name/mishearing or one of his story numbers, the first line may start ASKED: and give only an answer supported by verified PROJECT BRIEF/TODAY; prefix it "From the last verified note:" when the answer is not stated in the transcript. '+
+   'Add Yours: only when the transcript itself clearly assigns the task to Harsh. A bare "you" in a group call is not enough. '+
+   'Add Confirm: only when the transcript itself states a decision/date/scope/owner affecting Harsh and repeating it would prevent rework. '+
+   'Do not manufacture a speaking point just because his name, a story, FS, Q4, UAT or deployment was mentioned. Do not volunteer him for PO/dev/QA/test work. '+
    'Output the single line Nothing of yours on this topic when Harsh has no useful contribution or action.\n\n'+
-   'PROJECT BRIEF:\n'+$('brief').value+'\n\nTODAY:\n'+$('context').value+'\n\nTRANSCRIPT:\n'+recentText(WINDOW_MS);
+   'PROJECT BRIEF (context only):\n'+$('brief').value+'\n\nTODAY (context only):\n'+$('context').value+'\n\nTRANSCRIPT (only source of note facts):\n'+recentText(WINDOW_MS);
   sample(prompt,{max:320})
    .then(function(r){ if(my!==epoch) return; renderNotes(r.text); notesAt=Date.now(); })
    .catch(function(e){ if(my!==epoch) return; $('notesTopic').textContent='Notes paused ('+(e&&e.code||'error')+'): '+(e&&e.message||''); surfaceApiError(e,'live notes'); })
@@ -496,6 +498,7 @@ textarea{min-height:110px}
   rec.onerror=function(ev){ if(rec!==me) return;
    var er=ev.error;
    if(er==='aborted') return;                                            // we or Chrome ended it on purpose: onend restarts it
+   sessionSpeechErrors++;
    errLog.push(new Date().toLocaleTimeString()+' '+er); if(errLog.length>5) errLog.shift();
    $('diag').textContent='speech errors (last 5): '+errLog.join(' | ')+'\n';
    if(er==='no-speech') return;                                          // silence: onend restarts it
@@ -510,7 +513,7 @@ textarea{min-height:110px}
   // Chrome ends recognition after every pause; restarting at once is normal (hundreds per hour). A sentence cut off by the restart is kept as text.
   rec.onend=function(){ if(rec!==me) return;
    if(interimText){ var tt=interimText; interimText=''; var l2=segs.length?segs[segs.length-1]:null; if(!(l2 && l2.text.toLowerCase().indexOf(tt.toLowerCase())>-1)) segs.push({t:Date.now(),text:tt}); }
-   if(running){ restarts++; $('restarts').textContent=restarts; try{rec.start()}catch(e){ setTimeout(function(){ if(running&&rec===me) try{rec.start()}catch(e2){} },400);} } };
+   if(running){ restarts++; sessionRestarts++; $('restarts').textContent=restarts; try{rec.start()}catch(e){ setTimeout(function(){ if(running&&rec===me) try{rec.start()}catch(e2){} },400);} } };
   try{ rec.start(); }catch(e){}
  }
  function renderHeard(){
@@ -529,6 +532,7 @@ textarea{min-height:110px}
 
  $('startBtn').onclick=function(){
   clearStuck(); lastHeard=Date.now(); hideWarn(); epoch++; notesTry=0; notesAt=0; semanticBusy=false; semanticAt=0; semanticLastText=''; semanticLastReply=''; semanticLastReplyAt=0;
+  sessionSpeechErrors=0; sessionRestarts=0;
   running=true; setUI(); keepAwake(); startRec();
   // one tap does everything: renew the Drive sign-in (no popup if already approved) and refresh the brief
   if(driveLive()) syncBrief(); else if($('gcid').value.trim()) connectDrive(syncBrief,true);
@@ -547,13 +551,15 @@ textarea{min-height:110px}
   if(auto && segs.length<=wrapSegCount){ return; }       // nothing new since the last wrap
   if(auto && full.length<300){ return; }                 // too little speech to be a real call (for example just an error message heard by the mic)
   wrapBusy=true; wrapSegCount=segs.length;
+  var qualityWarn=(sessionSpeechErrors>=3||sessionRestarts>=250)?('WARNING: transcript quality may be degraded ('+sessionSpeechErrors+' speech errors, '+sessionRestarts+' restarts this listening session). Verify details against the call before acting.\n\n'):'';
   $('wrapBox').open=true; $('wrapOut').textContent=auto?'Auto-wrapping…':'Thinking…';
   var prompt='From this automatic transcript of a Teams meeting (it has errors and no speaker names), list ONLY what concerns the user named in the brief. '+
+   'EVIDENCE LOCK: the TRANSCRIPT is the only source of wrap facts. Do not infer, reconcile, normalize, complete, rename or summarize a garbled technical term into a likely real term. Do not combine separate fragments into a new package sequence, owner, dependency, date or technical conclusion. If exact wording is ambiguous, use the shortest wording as heard plus (as heard), or omit the item. '+
    'RULES: Every item must come from something actually said in the TRANSCRIPT. Use the brief and today notes ONLY to understand names, stories and context, never as a source of items: if a sentence, commitment or follow-up appears in the brief but is not repeated in the transcript, leave it out. If the brief and the transcript disagree, report what the transcript says. '+
    'The transcript has no speaker labels. The phone sits with the user but also hears every other speaker on the call. A first-person promise ("leave it to me", "let me get back to", "I will", "I can take that") is the user\'s own only when it follows a request addressed to the user (by name, misheard name or "you") or is clearly about the user\'s own work items in the brief: list those under Commitments the user made and add (verify speaker). A promise about a technical check, another team\'s system or someone else\'s script (for example a connected app, certificate, deployment or another tester\'s script) belongs to whoever said it: write it as (unclear who) or leave it out. Otherwise, if it is unclear who said something or who it is for, write (unclear who) instead of guessing a name. Do not claim something belongs to the user unless the transcript says so. '+
    'Keep timing exactly as said (this sprint, next sprint, tomorrow, a date) and keep story numbers and names exactly as said; never merge two different timings into one line. '+
    'If a date, number, owner or team name is garbled or could be heard two ways (for example "12:10 till 1:30"), quote the words as heard and add (as heard) instead of converting or guessing; fix a mishearing only when the brief\'s mishearing list gives the correction. Keep ownership exactly as said: if the transcript says a step is owned by one team, do not relabel it as another team or as the user. If another person says they will do something themselves (for example ask a third person for access), list it as theirs, not as the user\'s ask. '+
-   'THE USER\'S NAME AND MISHEARINGS: Harsh, Harsha, Horsham, Hash, Hush, Harsh Sharma'+($('names').value?', '+$('names').value:'')+'. A line addressed to any of these, or to "you" while the user is on the call, is addressed to the user, even if the rest of the sentence is garbled. A request such as "can you follow up", "maybe you can check" or "is Harsh on that email" is an Asked of the user item, and an answer such as "okay", "sounds good" or "sure" right after it is a Commitment (verify speaker). '+
+   'THE USER\'S NAME AND MISHEARINGS: Harsh, Harsha, Horsham, Hash, Hush, Harsh Sharma'+($('names').value?', '+$('names').value:'')+'. In this group-call transcript, assign something to the user only when the same or next line contains one of those name forms or one of his story numbers in a way that clearly addresses him. A bare "you" is not enough. A request such as "Harsh, can you follow up" is an Asked of the user item; an answer such as "okay", "sounds good" or "sure" immediately after it may be a Commitment (verify speaker). '+
    'If a follow-up request is present but the person it is for is unclear, list it as (unclear who) instead of dropping it; only write Nothing for you under a section when the transcript really contains nothing for it. '+
    'LIVE NOTES CANDIDATES: the lines below were flagged during the call. Treat each Yours: or ASKED: line as a candidate only. Keep it ONLY if you can point to words in the transcript (the same names, story numbers or action) that say it; if the candidate matches only the brief or today notes, drop it. Never add detail that is not in the transcript.\n'+liveNotesText()+'\n'+
    'ASKED OF THE USER is strict: this is a group-call transcript unless the transcript itself clearly proves a one-to-one. List an item there ONLY when the same or next line contains Harsh\'s name/mishearing or one of his story numbers in a way that clearly addresses him. A bare "you", a garbled imperative, or a question with unclear addressee is NOT enough in a group call: write (unclear who) outside Asked of the user or omit it. Other people\'s status updates (QA, automation, testing progress, scripts, capacity, another team\'s tasks, closing their own sub-tasks) go under Team updates, never under Asked of the user, even if he might find them useful.\n'+
@@ -561,7 +567,7 @@ textarea{min-height:110px}
    'PROJECT BRIEF:\n'+$('brief').value+'\n\nTODAY:\n'+$('context').value+'\n\nTRANSCRIPT:\n'+full.slice(-60000);
   var myw=epoch;
   sample(prompt,{max:1200,timeout:WRAP_TIMEOUT_MS})
-   .then(function(r){ wrapBusy=false; if(myw!==epoch) return; $('wrapOut').textContent=r.text; saveWrap(r.text)})
+   .then(function(r){ wrapBusy=false; if(myw!==epoch) return; var out=qualityWarn+(r.text||''); $('wrapOut').textContent=out; saveWrap(out)})
    .catch(function(e){ wrapBusy=false; wrapSegCount=0; saveTranscript(); if(myw!==epoch) return; $('wrapOut').textContent='Wrap failed ('+(e&&e.code||'error')+'): '+(e&&e.message||''); surfaceApiError(e,'wrap'); });
  }
  $('resetBtn').onclick=function(){
@@ -654,7 +660,7 @@ textarea{min-height:110px}
  function saveTranscript(){
   var t=segs.map(function(x){ return '['+clock(x.t)+'] '+x.text; }).join('\n');
   if(t.length<300) return;                              // too little speech to be a real call
-  if(tlog.length) t+='\n\n--- trigger log (Sidekick v19) ---\n'+tlog.join('\n');
+  if(tlog.length) t+='\n\n--- trigger log (Sidekick v20) ---\n'+tlog.join('\n');
   saveSlot('transcript',t);
  }
  function saveSlot(kind,text){

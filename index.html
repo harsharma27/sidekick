@@ -47,7 +47,7 @@ textarea{min-height:110px}
 </head>
 <body>
 <main>
-<h1>Meeting Sidekick <span style="font-weight:400">v20</span></h1>
+<h1>Meeting Sidekick <span style="font-weight:400">v21</span></h1>
 
 <div class="bar">
  <button id="startBtn" class="primary">Start listening</button>
@@ -65,7 +65,7 @@ textarea{min-height:110px}
 <div id="driveWarn" style="display:none;background:#9a6a00;color:#fff;padding:10px 12px;border-radius:10px;margin-bottom:10px;font-weight:600;cursor:pointer">Drive sign-in lapsed. Tap here to reconnect so the brief stays current.</div>
 <div id="warn" style="display:none;background:#b4441c;color:#fff;padding:10px 12px;border-radius:10px;margin-bottom:10px;font-weight:600"></div>
 <div id="driveStatus" style="font-size:13px;color:var(--muted);margin-bottom:8px">Brief: not connected</div>
-<div id="status">Mic: <b id="micState" class="off">off</b> · restarts: <b id="restarts">0</b> · replies: <b id="replyCount">0</b></div>
+<div id="status">Mic: <b id="micState" class="off">off</b> · restarts: <b id="restarts">0</b> · replies: <b id="replyCount">0</b> · session: <b id="sessionQuality">0 restarts / 0 errors</b></div>
 <div id="heard" style="font-family:'IBM Plex Mono',monospace;font-size:13px;color:var(--muted);margin:-6px 0 12px"></div>
 
 <div id="reply">
@@ -499,6 +499,7 @@ textarea{min-height:110px}
    var er=ev.error;
    if(er==='aborted') return;                                            // we or Chrome ended it on purpose: onend restarts it
    sessionSpeechErrors++;
+   $('sessionQuality').textContent=sessionRestarts+' restarts / '+sessionSpeechErrors+' errors';
    errLog.push(new Date().toLocaleTimeString()+' '+er); if(errLog.length>5) errLog.shift();
    $('diag').textContent='speech errors (last 5): '+errLog.join(' | ')+'\n';
    if(er==='no-speech') return;                                          // silence: onend restarts it
@@ -513,7 +514,7 @@ textarea{min-height:110px}
   // Chrome ends recognition after every pause; restarting at once is normal (hundreds per hour). A sentence cut off by the restart is kept as text.
   rec.onend=function(){ if(rec!==me) return;
    if(interimText){ var tt=interimText; interimText=''; var l2=segs.length?segs[segs.length-1]:null; if(!(l2 && l2.text.toLowerCase().indexOf(tt.toLowerCase())>-1)) segs.push({t:Date.now(),text:tt}); }
-   if(running){ restarts++; sessionRestarts++; $('restarts').textContent=restarts; try{rec.start()}catch(e){ setTimeout(function(){ if(running&&rec===me) try{rec.start()}catch(e2){} },400);} } };
+   if(running){ restarts++; sessionRestarts++; $('restarts').textContent=restarts; $('sessionQuality').textContent=sessionRestarts+' restarts / '+sessionSpeechErrors+' errors'; try{rec.start()}catch(e){ setTimeout(function(){ if(running&&rec===me) try{rec.start()}catch(e2){} },400);} } };
   try{ rec.start(); }catch(e){}
  }
  function renderHeard(){
@@ -532,7 +533,7 @@ textarea{min-height:110px}
 
  $('startBtn').onclick=function(){
   clearStuck(); lastHeard=Date.now(); hideWarn(); epoch++; notesTry=0; notesAt=0; semanticBusy=false; semanticAt=0; semanticLastText=''; semanticLastReply=''; semanticLastReplyAt=0;
-  sessionSpeechErrors=0; sessionRestarts=0;
+  sessionSpeechErrors=0; sessionRestarts=0; $('sessionQuality').textContent='0 restarts / 0 errors';
   running=true; setUI(); keepAwake(); startRec();
   // one tap does everything: renew the Drive sign-in (no popup if already approved) and refresh the brief
   if(driveLive()) syncBrief(); else if($('gcid').value.trim()) connectDrive(syncBrief,true);
@@ -563,7 +564,7 @@ textarea{min-height:110px}
    'If a follow-up request is present but the person it is for is unclear, list it as (unclear who) instead of dropping it; only write Nothing for you under a section when the transcript really contains nothing for it. '+
    'LIVE NOTES CANDIDATES: the lines below were flagged during the call. Treat each Yours: or ASKED: line as a candidate only. Keep it ONLY if you can point to words in the transcript (the same names, story numbers or action) that say it; if the candidate matches only the brief or today notes, drop it. Never add detail that is not in the transcript.\n'+liveNotesText()+'\n'+
    'ASKED OF THE USER is strict: this is a group-call transcript unless the transcript itself clearly proves a one-to-one. List an item there ONLY when the same or next line contains Harsh\'s name/mishearing or one of his story numbers in a way that clearly addresses him. A bare "you", a garbled imperative, or a question with unclear addressee is NOT enough in a group call: write (unclear who) outside Asked of the user or omit it. Other people\'s status updates (QA, automation, testing progress, scripts, capacity, another team\'s tasks, closing their own sub-tasks) go under Team updates, never under Asked of the user, even if he might find them useful.\n'+
-   'Sections: Asked of the user; Commitments the user made; Decisions affecting their work; Follow-ups they might send (a follow-up for each commitment, naming who it goes to); Team updates affecting the user. Keep Team updates to at most 3 short lines and include only updates that change Harsh\'s next action, dependency, timing, or risk. Do not produce a generic meeting recap. Plain short lines, no filler. If a section has nothing, write Nothing for you under it.\n\n'+
+   'Sections: Asked of the user; Commitments the user made; Decisions affecting their work; Follow-ups they might send (a follow-up for each commitment, naming who it goes to); Team updates affecting the user. Keep Team updates to at most 3 short lines and include only updates that change Harsh\'s next action, dependency, timing, or risk. Do not produce a generic meeting recap. Plain short lines, no filler. If a section has nothing, write exactly Nothing for you under it and NOTHING ELSE: no parenthetical explanation, no topic summary, no rationale, and no reference to PROJECT BRIEF/TODAY/earlier calls. Empty-section wording must be supported only by the absence of qualifying items in this TRANSCRIPT.\n\n'+
    'PROJECT BRIEF:\n'+$('brief').value+'\n\nTODAY:\n'+$('context').value+'\n\nTRANSCRIPT:\n'+full.slice(-60000);
   var myw=epoch;
   sample(prompt,{max:1200,timeout:WRAP_TIMEOUT_MS})
@@ -573,7 +574,7 @@ textarea{min-height:110px}
  $('resetBtn').onclick=function(){
   epoch++; abortInflight(); queued=null; notesBusy=false; notesTry=0; notesAt=0; interimText=''; apiAutoPausedUntil=0;
   clearTimeout(pending); pending=null; pendingReason=null; pendingStart=0; clearRetry();
-  hear.audio=hear.sound=hear.text=0; segs.length=0; busy=false; lastName=0; lastCue=0; replies=0; lastHeard=running?Date.now():0; semanticBusy=false; semanticAt=0; semanticLastText=''; semanticLastReply=''; semanticLastReplyAt=0;
+  hear.audio=hear.sound=hear.text=0; segs.length=0; busy=false; lastName=0; lastCue=0; replies=0; lastHeard=running?Date.now():0; semanticBusy=false; semanticAt=0; semanticLastText=''; semanticLastReply=''; semanticLastReplyAt=0; sessionSpeechErrors=0; sessionRestarts=0; $('sessionQuality').textContent='0 restarts / 0 errors';
   $('reply').classList.remove('hot'); $('replyText').textContent=INITIAL_REPLY; $('trigger').textContent='';
   $('replyCount').textContent=0; $('wrapOut').textContent=INITIAL_WRAP; $('wrapSaved').textContent=''; driveSlots={wrap:null,transcript:null}; driveStat={wrap:'',transcript:''}; sessionStamp=null; wrapSegCount=0; wrapBusy=false; $('diag').textContent=''; hideWarn();
   $('notesTopic').textContent='Start listening and notes appear here.'; $('notesList').textContent='';
@@ -660,7 +661,7 @@ textarea{min-height:110px}
  function saveTranscript(){
   var t=segs.map(function(x){ return '['+clock(x.t)+'] '+x.text; }).join('\n');
   if(t.length<300) return;                              // too little speech to be a real call
-  if(tlog.length) t+='\n\n--- trigger log (Sidekick v20) ---\n'+tlog.join('\n');
+  if(tlog.length) t+='\n\n--- trigger log (Sidekick v21) ---\n'+tlog.join('\n');
   saveSlot('transcript',t);
  }
  function saveSlot(kind,text){

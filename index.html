@@ -47,7 +47,7 @@ textarea{min-height:110px}
 </head>
 <body>
 <main>
-<h1>Meeting Sidekick <span style="font-weight:400">v18</span></h1>
+<h1>Meeting Sidekick <span style="font-weight:400">v19</span></h1>
 
 <div class="bar">
  <button id="startBtn" class="primary">Start listening</button>
@@ -151,11 +151,12 @@ textarea{min-height:110px}
  var MIN_WORDS_SPEAK=3;      // "I want to speak"
  var THIN_WAIT_MS=60000;
  var REQ_TIMEOUT_MS=25000, WRAP_TIMEOUT_MS=60000;
- var NOTES_EVERY_MS=20000;   // notes refresh at most this often, and only when there is new speech
+ var NOTES_EVERY_MS=30000;   // notes refresh at most this often, and only when there is new speech
  var briefAt=0, errLog=[], errStreak=0, retryTimerRec=null;              // when the brief was last synced from Drive (or typed in)
  var notesOn=true, notesBusy=false, notesTry=0, notesAt=0;
-  var semanticBusy=false, semanticAt=0, semanticLastText='', semanticLastReply='', semanticLastReplyAt=0;
-  var SEMANTIC_EVERY_MS=8000, SEMANTIC_WINDOW_MS=70000, SEMANTIC_REPLY_COOLDOWN=18000;
+ var semanticBusy=false, semanticAt=0, semanticLastText='', semanticLastReply='', semanticLastReplyAt=0;
+ var SEMANTIC_EVERY_MS=15000, SEMANTIC_WINDOW_MS=70000, SEMANTIC_REPLY_COOLDOWN=18000;
+ var apiAutoPausedUntil=0, API_AUTO_PAUSE_MS=5*60*1000;
 
  // ---------- settings ----------
  function load(){try{
@@ -237,6 +238,15 @@ textarea{min-height:110px}
  function similar(a,b){ var A=a.split(/\s+/),B=b.split(/\s+/); var set={}; A.forEach(function(w){set[w]=1}); var c=0; B.forEach(function(w){ if(set[w]) c++; }); return c/Math.max(1,Math.min(A.length,B.length)); }
  function showWarn(m){ var w=$('warn'); w.textContent=m; w.style.display='block'; if(navigator.vibrate) navigator.vibrate(300); }
  function hideWarn(){ $('warn').style.display='none'; }
+ function isApiLimitError(e){ var m=((e&&e.message)||'').toLowerCase(); return (e&&e.code==='http_400') && (m.indexOf('credit balance')>-1 || m.indexOf('usage limit')>-1 || m.indexOf('usage limits')>-1); }
+ function surfaceApiError(e,source){
+  var msg=(e&&e.message)||'API request failed';
+  if(isApiLimitError(e)) apiAutoPausedUntil=Date.now()+API_AUTO_PAUSE_MS;
+  showWarn('Sidekick AI unavailable ('+(source||'request')+'): '+msg+(isApiLimitError(e)?' Automatic prompts paused for 5 minutes.':'') );
+  $('reply').classList.add('hot');
+  $('replyText').textContent='Sidekick could not check what you should say: '+msg;
+  $('trigger').textContent='AI error at '+new Date().toLocaleTimeString()+' — this is not a “Nothing for you” result.';
+ }
  function edit1(a,b){ if(Math.abs(a.length-b.length)>1) return false; var i=0,j=0,d=0; while(i<a.length&&j<b.length){ if(a[i]===b[j]){i++;j++;continue;} d++; if(d>1) return false; if(a.length>b.length) i++; else if(b.length>a.length) j++; else {i++;j++;} } return d+(a.length-i)+(b.length-j)<=1; }
  function isCue(reason){ return /^cue/.test(reason||''); }
  function checkTrigger(text){
@@ -246,7 +256,7 @@ textarea{min-height:110px}
   list($('names').value).forEach(function(n){
    if(hit) return;
    if(low.indexOf(' '+n+' ')>-1){ hit='name: '+n; return; }
-   if(n.indexOf(' ')<0 && n.length>=5){ words.forEach(function(w){ if(!hit && w.length>=4 && w!==n && edit1(w,n)) hit='name (close): '+w; }); }   // 4-letter names (hash, hush) match exactly only, or "cash" and "wash" fire
+   if(n.indexOf(' ')<0 && n.length>=5){ words.forEach(function(w){ if(!hit && w.length>=4 && w!==n && w.charAt(0)===n.charAt(0) && edit1(w,n)) hit='name (close): '+w; }); }   // fuzzy match only when the first letter also matches; reduces false hits such as "parish" for "harsh"
   });
   if(!hit){ list($('stories').value).forEach(function(n){ var d=n.replace(/\D/g,''); if(d && !hit && low.replace(/ /g,'').indexOf(d)>-1) hit='story: '+d; }); }
   if(!hit){
@@ -303,7 +313,9 @@ textarea{min-height:110px}
  function semanticWindow(){ return recentText(SEMANTIC_WINDOW_MS); }
  function semanticDecision(){
   if(!running||semanticBusy||busy) return;
-  var now=Date.now(), tr=semanticWindow();
+  var now=Date.now();
+  if(now<apiAutoPausedUntil) return;
+  var tr=semanticWindow();
   if(now-semanticAt<SEMANTIC_EVERY_MS) return;
   if(tr.split(/\s+/).filter(Boolean).length<12) return;
   if(tr===semanticLastText) return;
@@ -338,7 +350,7 @@ textarea{min-height:110px}
       logT('semantic','nothing for you','');
      }
    })
-   .catch(function(e){ if(my!==epoch) return; logT('semantic','error',(e&&e.code||'error')+' '+(e&&e.message||'')); })
+   .catch(function(e){ if(my!==epoch) return; logT('semantic','error',(e&&e.code||'error')+' '+(e&&e.message||'')); surfaceApiError(e,'live prompt'); })
    .then(function(){ semanticBusy=false; });
  }
 
@@ -402,7 +414,7 @@ textarea{min-height:110px}
      }
      else { $('replyText').textContent=t; if(navigator.vibrate) navigator.vibrate(200); logT(reason,'replied',t.slice(0,120)); }   // stays highlighted until Dismiss
    })
-   .catch(function(e){ if(my!==epoch) return; $('replyText').textContent='No reply ('+(e&&e.code||'error')+'): '+(e&&e.message||''); logT(reason,'error',(e&&e.code||'error')+' '+(e&&e.message||'')); })
+   .catch(function(e){ if(my!==epoch) return; surfaceApiError(e,mode==='speak'?'I want to speak':'trigger'); logT(reason,'error',(e&&e.code||'error')+' '+(e&&e.message||'')); })
    .then(function(){ if(my!==epoch) return; busy=false; if(queued){ var q=queued; queued=null; fire(q,false,true); } });
  }
  $('dismissBtn').onclick=function(){ $('reply').classList.remove('hot'); $('replyText').textContent=INITIAL_REPLY; $('trigger').textContent=''; };
@@ -421,7 +433,7 @@ textarea{min-height:110px}
   if(!items.length){ var li=document.createElement('li'); li.textContent='Nothing of yours on this topic'; ul.appendChild(li); }
  }
  function refreshNotes(){
-  if(notesBusy||!notesOn||!running) return;
+  if(notesBusy||!notesOn||!running||Date.now()<apiAutoPausedUntil) return;
   notesBusy=true; notesTry=Date.now(); var my=epoch;
   var prompt=COMMON+
    'Act as his live prompter. Output exactly this shape and nothing else:\n'+
@@ -436,11 +448,11 @@ textarea{min-height:110px}
    'PROJECT BRIEF:\n'+$('brief').value+'\n\nTODAY:\n'+$('context').value+'\n\nTRANSCRIPT:\n'+recentText(WINDOW_MS);
   sample(prompt,{max:320})
    .then(function(r){ if(my!==epoch) return; renderNotes(r.text); notesAt=Date.now(); })
-   .catch(function(e){ if(my!==epoch) return; $('notesTopic').textContent='Notes paused ('+(e&&e.code||'error')+'): '+(e&&e.message||''); })
+   .catch(function(e){ if(my!==epoch) return; $('notesTopic').textContent='Notes paused ('+(e&&e.code||'error')+'): '+(e&&e.message||''); surfaceApiError(e,'live notes'); })
    .then(function(){ notesBusy=false; });
  }
  setInterval(function(){
-  if(!running||!notesOn||notesBusy) return;
+  if(!running||!notesOn||notesBusy||Date.now()<apiAutoPausedUntil) return;
   if(Date.now()-notesTry<NOTES_EVERY_MS) return;
   if(lastHeard<=notesTry) return;               // no new finished speech since the last try
   if(wordCount(30000)<8) return;
@@ -531,6 +543,7 @@ textarea{min-height:110px}
  function doWrap(auto){
   var full=segs.map(function(s){return s.text}).join(' ');
   if(!full || wrapBusy){ return; }
+  hideWarn();
   if(auto && segs.length<=wrapSegCount){ return; }       // nothing new since the last wrap
   if(auto && full.length<300){ return; }                 // too little speech to be a real call (for example just an error message heard by the mic)
   wrapBusy=true; wrapSegCount=segs.length;
@@ -543,16 +556,16 @@ textarea{min-height:110px}
    'THE USER\'S NAME AND MISHEARINGS: Harsh, Harsha, Horsham, Hash, Hush, Harsh Sharma'+($('names').value?', '+$('names').value:'')+'. A line addressed to any of these, or to "you" while the user is on the call, is addressed to the user, even if the rest of the sentence is garbled. A request such as "can you follow up", "maybe you can check" or "is Harsh on that email" is an Asked of the user item, and an answer such as "okay", "sounds good" or "sure" right after it is a Commitment (verify speaker). '+
    'If a follow-up request is present but the person it is for is unclear, list it as (unclear who) instead of dropping it; only write Nothing for you under a section when the transcript really contains nothing for it. '+
    'LIVE NOTES CANDIDATES: the lines below were flagged during the call. Treat each Yours: or ASKED: line as a candidate only. Keep it ONLY if you can point to words in the transcript (the same names, story numbers or action) that say it; if the candidate matches only the brief or today notes, drop it. Never add detail that is not in the transcript.\n'+liveNotesText()+'\n'+
-   'ASKED OF THE USER is strict: list an item there ONLY when the same or next line contains his name (or a mishearing), one of his story numbers, or "you" in a one-to-one call. Other people\'s status updates (QA, automation, testing progress, scripts, capacity, another team\'s tasks, closing their own sub-tasks) go under Team updates, never under Asked of the user, even if he might find them useful.\n'+
-   'Sections: Asked of the user; Commitments the user made; Decisions affecting their work; Follow-ups they might send (a follow-up for each commitment, naming who it goes to); Team updates (not his, one line each). Plain short lines, no filler. If a section has nothing, write Nothing for you under it.\n\n'+
+   'ASKED OF THE USER is strict: this is a group-call transcript unless the transcript itself clearly proves a one-to-one. List an item there ONLY when the same or next line contains Harsh\'s name/mishearing or one of his story numbers in a way that clearly addresses him. A bare "you", a garbled imperative, or a question with unclear addressee is NOT enough in a group call: write (unclear who) outside Asked of the user or omit it. Other people\'s status updates (QA, automation, testing progress, scripts, capacity, another team\'s tasks, closing their own sub-tasks) go under Team updates, never under Asked of the user, even if he might find them useful.\n'+
+   'Sections: Asked of the user; Commitments the user made; Decisions affecting their work; Follow-ups they might send (a follow-up for each commitment, naming who it goes to); Team updates affecting the user. Keep Team updates to at most 3 short lines and include only updates that change Harsh\'s next action, dependency, timing, or risk. Do not produce a generic meeting recap. Plain short lines, no filler. If a section has nothing, write Nothing for you under it.\n\n'+
    'PROJECT BRIEF:\n'+$('brief').value+'\n\nTODAY:\n'+$('context').value+'\n\nTRANSCRIPT:\n'+full.slice(-60000);
   var myw=epoch;
   sample(prompt,{max:1200,timeout:WRAP_TIMEOUT_MS})
    .then(function(r){ wrapBusy=false; if(myw!==epoch) return; $('wrapOut').textContent=r.text; saveWrap(r.text)})
-   .catch(function(e){ wrapBusy=false; wrapSegCount=0; saveTranscript(); if(myw!==epoch) return; $('wrapOut').textContent='Wrap failed ('+(e&&e.code||'error')+'): '+(e&&e.message||'')});
+   .catch(function(e){ wrapBusy=false; wrapSegCount=0; saveTranscript(); if(myw!==epoch) return; $('wrapOut').textContent='Wrap failed ('+(e&&e.code||'error')+'): '+(e&&e.message||''); surfaceApiError(e,'wrap'); });
  }
  $('resetBtn').onclick=function(){
-  epoch++; abortInflight(); queued=null; notesBusy=false; notesTry=0; notesAt=0; interimText='';
+  epoch++; abortInflight(); queued=null; notesBusy=false; notesTry=0; notesAt=0; interimText=''; apiAutoPausedUntil=0;
   clearTimeout(pending); pending=null; pendingReason=null; pendingStart=0; clearRetry();
   hear.audio=hear.sound=hear.text=0; segs.length=0; busy=false; lastName=0; lastCue=0; replies=0; lastHeard=running?Date.now():0; semanticBusy=false; semanticAt=0; semanticLastText=''; semanticLastReply=''; semanticLastReplyAt=0;
   $('reply').classList.remove('hot'); $('replyText').textContent=INITIAL_REPLY; $('trigger').textContent='';
@@ -641,7 +654,7 @@ textarea{min-height:110px}
  function saveTranscript(){
   var t=segs.map(function(x){ return '['+clock(x.t)+'] '+x.text; }).join('\n');
   if(t.length<300) return;                              // too little speech to be a real call
-  if(tlog.length) t+='\n\n--- trigger log (Sidekick v18) ---\n'+tlog.join('\n');
+  if(tlog.length) t+='\n\n--- trigger log (Sidekick v19) ---\n'+tlog.join('\n');
   saveSlot('transcript',t);
  }
  function saveSlot(kind,text){

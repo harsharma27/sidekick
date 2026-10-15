@@ -28,6 +28,9 @@ button:disabled{opacity:.45}
 #reply .text{font-size:26px;line-height:1.3;font-weight:600}
 #reply.hot{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent)}
 #reply .head{display:flex;justify-content:space-between;align-items:center}
+#ondeck{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:12px 16px;margin-bottom:12px}
+#ondeck .label{font-size:12px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);margin-bottom:6px}
+#ondeckText{font-size:19px;line-height:1.35;font-weight:600}
 #dismissBtn{padding:4px 10px;font-size:13px}
 #notes{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:12px 16px;margin-bottom:12px}
 #notes .label{font-size:12px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);display:flex;justify-content:space-between}
@@ -47,7 +50,7 @@ textarea{min-height:110px}
 </head>
 <body>
 <main>
-<h1>Meeting Sidekick <span style="font-weight:400">v21</span></h1>
+<h1>Meeting Sidekick <span style="font-weight:400">v22</span></h1>
 
 <div class="bar">
  <button id="startBtn" class="primary">Start listening</button>
@@ -72,6 +75,11 @@ textarea{min-height:110px}
  <div class="head"><div class="label">Say this</div><button id="dismissBtn">Dismiss</button></div>
  <div class="text" id="replyText">Waiting. A reply appears when there is a useful reason for you to speak now, or when you tap I want to speak.</div>
  <div id="trigger"></div>
+</div>
+
+<div id="ondeck">
+ <div class="label">On deck — if you unmute now</div>
+ <div id="ondeckText">Nothing to raise yet.</div>
 </div>
 
 <div id="notes">
@@ -141,7 +149,7 @@ textarea{min-height:110px}
  var epoch=0;            // bumped by Reset/Start/Stop: a reply from an older epoch is ignored
  var inflight=[];
  var retry=null, retryTimer=null;
- var INITIAL_REPLY=$('replyText').textContent, INITIAL_WRAP=$('wrapOut').textContent;
+ var INITIAL_REPLY=$('replyText').textContent, INITIAL_ONDECK=$('ondeckText').textContent, INITIAL_WRAP=$('wrapOut').textContent;
  var COOLDOWN=40000;         // repeat of a cue phrase ("any update"): wait this long
  var NAME_COOLDOWN=12000;    // repeat of your name or a story number: wait this long
  var WINDOW_MS=120000;
@@ -328,8 +336,9 @@ textarea{min-height:110px}
    '(5) Harsh can close an open item with one short verified fact. '+
    'Do NOT trigger for casual name mentions, praise, jokes, story numbers with no ask, PO/dev/QA technical discussion, questions already answered by someone else, '+
    'generic just-to-confirm repetition, low-value summaries, or actions clearly owned by someone else. '+
-   'If you trigger, output exactly one line beginning SAY: followed by one or two short spoken sentences in Harsh\'s junior, factual voice. '+
-   'If there is no useful reason to speak, output exactly NOTHING. '+
+   'If Harsh should speak right now, output exactly one line beginning SAY: followed by one or two short spoken sentences in Harsh\'s junior, factual voice. '+
+   'If he does not need to interrupt right now but there is a genuinely useful contribution he could make if he chooses to unmute, output exactly one line beginning ONDECK: followed by ONE short sentence he can say. Keep ONDECK proactive but high-value: a relevant question, verified status, dependency, risk, or decision read-back; never filler, repetition, or another owner\'s work. '+
+   'If there is neither a useful immediate intervention nor a useful on-deck contribution, output exactly NOTHING. '+
    'Never invent status, dates, owners, root cause, or current Jira state. If the brief only gives historical evidence, qualify it as I think or From the last review.\n\n'+
    'PROJECT BRIEF:\n'+$('brief').value+'\n\nTODAY:\n'+$('context').value+'\n\nTRANSCRIPT:\n'+tr;
   sample(prompt,{max:180})
@@ -341,12 +350,18 @@ textarea{min-height:110px}
        logT('semantic','skipped','similar recent cue'); return;
       }
       semanticLastReply=line; semanticLastReplyAt=Date.now();
+      $('ondeckText').textContent=line;
       replies++; $('replyCount').textContent=replies;
       $('reply').classList.add('hot'); $('replyText').textContent=line;
       $('trigger').textContent='Useful speaking moment detected at '+new Date().toLocaleTimeString();
       if(navigator.vibrate) navigator.vibrate(180);
       logT('semantic','replied',line.slice(0,120));
+     } else if(/^ondeck\s*:/i.test(v)){
+      var deck=v.replace(/^ondeck\s*:\s*/i,'').trim();
+      if(deck) $('ondeckText').textContent=deck;
+      logT('semantic','on deck',deck.slice(0,120));
      } else {
+      $('ondeckText').textContent='Nothing to raise.';
       logT('semantic','nothing for you','');
      }
    })
@@ -533,7 +548,7 @@ textarea{min-height:110px}
 
  $('startBtn').onclick=function(){
   clearStuck(); lastHeard=Date.now(); hideWarn(); epoch++; notesTry=0; notesAt=0; semanticBusy=false; semanticAt=0; semanticLastText=''; semanticLastReply=''; semanticLastReplyAt=0;
-  sessionSpeechErrors=0; sessionRestarts=0; $('sessionQuality').textContent='0 restarts / 0 errors';
+  sessionSpeechErrors=0; sessionRestarts=0; $('sessionQuality').textContent='0 restarts / 0 errors'; $('ondeckText').textContent=INITIAL_ONDECK;
   running=true; setUI(); keepAwake(); startRec();
   // one tap does everything: renew the Drive sign-in (no popup if already approved) and refresh the brief
   if(driveLive()) syncBrief(); else if($('gcid').value.trim()) connectDrive(syncBrief,true);
@@ -575,7 +590,7 @@ textarea{min-height:110px}
   epoch++; abortInflight(); queued=null; notesBusy=false; notesTry=0; notesAt=0; interimText=''; apiAutoPausedUntil=0;
   clearTimeout(pending); pending=null; pendingReason=null; pendingStart=0; clearRetry();
   hear.audio=hear.sound=hear.text=0; segs.length=0; busy=false; lastName=0; lastCue=0; replies=0; lastHeard=running?Date.now():0; semanticBusy=false; semanticAt=0; semanticLastText=''; semanticLastReply=''; semanticLastReplyAt=0; sessionSpeechErrors=0; sessionRestarts=0; $('sessionQuality').textContent='0 restarts / 0 errors';
-  $('reply').classList.remove('hot'); $('replyText').textContent=INITIAL_REPLY; $('trigger').textContent='';
+  $('reply').classList.remove('hot'); $('replyText').textContent=INITIAL_REPLY; $('ondeckText').textContent=INITIAL_ONDECK; $('trigger').textContent='';
   $('replyCount').textContent=0; $('wrapOut').textContent=INITIAL_WRAP; $('wrapSaved').textContent=''; driveSlots={wrap:null,transcript:null}; driveStat={wrap:'',transcript:''}; sessionStamp=null; wrapSegCount=0; wrapBusy=false; $('diag').textContent=''; hideWarn();
   $('notesTopic').textContent='Start listening and notes appear here.'; $('notesList').textContent='';
   tlog=[]; lastLogKey=''; lastHitText=''; $('tlog').textContent=''; $('tlogCount').textContent=0;
@@ -661,7 +676,7 @@ textarea{min-height:110px}
  function saveTranscript(){
   var t=segs.map(function(x){ return '['+clock(x.t)+'] '+x.text; }).join('\n');
   if(t.length<300) return;                              // too little speech to be a real call
-  if(tlog.length) t+='\n\n--- trigger log (Sidekick v21) ---\n'+tlog.join('\n');
+  if(tlog.length) t+='\n\n--- trigger log (Sidekick v22) ---\n'+tlog.join('\n');
   saveSlot('transcript',t);
  }
  function saveSlot(kind,text){

@@ -50,7 +50,7 @@ textarea{min-height:110px}
 </head>
 <body>
 <main>
-<h1>Meeting Sidekick <span style="font-weight:400">v22</span></h1>
+<h1>Meeting Sidekick <span style="font-weight:400">v23</span></h1>
 
 <div class="bar">
  <button id="startBtn" class="primary">Start listening</button>
@@ -79,7 +79,7 @@ textarea{min-height:110px}
 
 <div id="ondeck">
  <div class="label">On deck — if you unmute now</div>
- <div id="ondeckText">Nothing to raise yet.</div>
+ <div id="ondeckText">Nothing to raise.</div>
 </div>
 
 <div id="notes">
@@ -317,8 +317,11 @@ textarea{min-height:110px}
   'Stay in Harsh\'s BSA lane: answer or clarify functional scope and verified history, but do not volunteer him for dev, QA, test execution, root-cause diagnosis, or another owner\'s decision. '+
   'The core question is not whether his name or story was mentioned. The core question is whether speaking NOW would add useful information, answer an ask, prevent rework or mistake, clarify Harsh-owned work, or protect his ownership. ';
 
- // v18 semantic gate: evaluate the conversation itself, not just names/story numbers.
+ // Semantic gate: evaluate the conversation itself, not just names/story numbers.
  function semanticWindow(){ return recentText(SEMANTIC_WINDOW_MS); }
+ function speculativeOndeckFollowup(line){
+  return /\b(?:i\s+(?:can|will|'ll)\s+(?:check|ask|follow\s*up|chase|verify|review|look\s+into|reach\s+out|raise)|i\s+(?:can|will|'ll)\s+confirm\s+with|let\s+me\s+(?:check|ask|confirm|follow\s*up|chase|verify|review|look\s+into|reach\s+out|raise))\b/i.test(line||'');
+ }
  function semanticDecision(){
   if(!running||semanticBusy||busy) return;
   var now=Date.now();
@@ -337,7 +340,8 @@ textarea{min-height:110px}
    'Do NOT trigger for casual name mentions, praise, jokes, story numbers with no ask, PO/dev/QA technical discussion, questions already answered by someone else, '+
    'generic just-to-confirm repetition, low-value summaries, or actions clearly owned by someone else. '+
    'If Harsh should speak right now, output exactly one line beginning SAY: followed by one or two short spoken sentences in Harsh\'s junior, factual voice. '+
-   'If he does not need to interrupt right now but there is a genuinely useful contribution he could make if he chooses to unmute, output exactly one line beginning ONDECK: followed by ONE short sentence he can say. Keep ONDECK proactive but high-value: a relevant question, verified status, dependency, risk, or decision read-back; never filler, repetition, or another owner\'s work. '+
+   'If he does not need to interrupt right now but there is a genuinely useful contribution he could make if he chooses to unmute, output exactly one line beginning ONDECK: followed by ONE short sentence he can say. Keep ONDECK proactive but high-value: a relevant question already raised in the current discussion, verified status, dependency, risk, or decision read-back; never filler, repetition, or another owner\'s work. '+
+   'An ONDECK line must be grounded in the current transcript plus PROJECT BRIEF or TODAY. It must NOT create a new follow-up, volunteer Harsh to check something later, or offer to confirm/ask/chase another person. Do not write phrases such as I can check, I can confirm with, I will ask, I\'ll follow up, or Let me verify. If the useful contribution depends on Harsh taking a new action after the call, output NOTHING unless the transcript directly asks Harsh to own it and the brief/TODAY confirms that ownership. '+
    'If there is neither a useful immediate intervention nor a useful on-deck contribution, output exactly NOTHING. '+
    'Never invent status, dates, owners, root cause, or current Jira state. If the brief only gives historical evidence, qualify it as I think or From the last review.\n\n'+
    'PROJECT BRIEF:\n'+$('brief').value+'\n\nTODAY:\n'+$('context').value+'\n\nTRANSCRIPT:\n'+tr;
@@ -358,8 +362,13 @@ textarea{min-height:110px}
       logT('semantic','replied',line.slice(0,120));
      } else if(/^ondeck\s*:/i.test(v)){
       var deck=v.replace(/^ondeck\s*:\s*/i,'').trim();
-      if(deck) $('ondeckText').textContent=deck;
-      logT('semantic','on deck',deck.slice(0,120));
+      if(deck && !speculativeOndeckFollowup(deck)){
+       $('ondeckText').textContent=deck;
+       logT('semantic','on deck',deck.slice(0,120));
+      } else {
+       $('ondeckText').textContent='Nothing to raise.';
+       logT('semantic','nothing for you',deck?'blocked speculative on-deck follow-up':'empty on-deck');
+      }
      } else {
       $('ondeckText').textContent='Nothing to raise.';
       logT('semantic','nothing for you','');

@@ -102,6 +102,7 @@ a.bm{display:inline-block;padding:7px 12px;border-radius:8px;background:var(--ch
    <label style="margin:0"><input type="file" id="packFile" accept=".json" style="display:none"><span class="chip">Load pack from a file</span></label>
   </div>
   <div class="muted" id="setStatus" style="margin-top:6px"></div>
+  <label>Last AI reply (for troubleshooting)</label><pre id="lastReply" class="muted">None yet.</pre>
  </details>
 </div>
 <p class="muted">Captions are read from your own Teams tab by the bookmark. Only when something is aimed at you, or you tap a button, are the recent caption lines sent with your context pack to Claude through your API key. Wraps are saved to your Drive folder only when you tap Save.</p>
@@ -264,7 +265,7 @@ var RULES='You support Harsh during a live Illumina CMCM Field Service work call
  'Ground every fact in the transcript or the pack. When you use the pack, cite the item and log date, for example (tracker g24, 23 Oct). Never invent status, owners, dates or decisions. If the pack does not cover it, say so plainly and give a safe holding line. '+
  'Stay in his lane as a junior BSA: functional scope, FR status, what he has checked, who he is waiting on. Never volunteer him for development, QA execution, root cause diagnosis or another owner\'s decision. '+
  'Spoken lines follow his voice: plain, polite, short sentences, full CMCM- prefix on story numbers, no em dashes, no jargon he would not use.';
-var usage=loadUsage();
+var usage=loadUsage(), lastReply='';
 function today(){ var d=new Date(); return d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate()); }
 function loadUsage(){ try{ var u=JSON.parse(localStorage.getItem(KEY+'_usage')||'null'); if(u&&u.day===today()) return u; }catch(e){} return {day:today(),calls:0,inTok:0,cacheTok:0,outTok:0}; }
 function renderUsage(){ $('aiPill').textContent='AI: '+usage.calls+' calls today ('+Math.round((usage.inTok+usage.cacheTok)/1000)+'k in, '+Math.round(usage.outTok/1000)+'k out)'; $('aiPill').className='pill'+(usage.calls>=S.cap?' bad':''); }
@@ -283,7 +284,11 @@ function claude(model,userText,maxTok){
   .then(function(j){
    var u=j.usage||{}; usage.inTok+=(u.input_tokens||0)+(u.cache_creation_input_tokens||0); usage.cacheTok+=(u.cache_read_input_tokens||0); usage.outTok+=(u.output_tokens||0);
    try{ localStorage.setItem(KEY+'_usage',JSON.stringify(usage)); }catch(e){} renderUsage(); banner('');
-   return (j.content||[]).filter(function(c){return c.type==='text'}).map(function(c){return c.text}).join('\n').trim();
+   var text=(j.content||[]).filter(function(c){return c.type==='text'}).map(function(c){return c.text}).join('\n').trim();
+   lastReply='model '+(j.model||model)+' | stop '+(j.stop_reason||'?')+' | blocks '+(j.content||[]).map(function(c){return c.type}).join(',')+' | out '+((j.usage||{}).output_tokens||0)+' tokens\n'+text;
+   var lr=$('lastReply'); if(lr) lr.textContent=lastReply;
+   if(!text) throw new Error('The AI sent no text back (stop: '+(j.stop_reason||'?')+'). Details under Setup and settings, Last AI reply.');
+   return text;
   },function(e){ clearTimeout(timer); throw e.name==='AbortError'?new Error('The AI request timed out.'):e; });
 }
 function parseJSON(t){ var m=(t||'').match(/\{[\s\S]*\}/); if(!m) return null; try{ return JSON.parse(m[0]); }catch(e){ return null; } }
@@ -291,7 +296,7 @@ function showAsk(who,say,more,hot){ $('askWho').textContent=who; $('askSay').tex
 function gateThenAnswer(L,why){
  showAsk('Heard '+why+' from '+(L.author||'someone')+' at '+clock(L.t)+': "'+L.text+'". Checking...','','',true);
  var q='Recent captions (newest last):\n'+transcript(25)+'\n\nThe line that triggered this: '+(L.author||'?')+': '+L.text+'\n\nIs Harsh being asked something, or about to be assigned or assumed to own something, right now? Reply with JSON only: {"for_me": true|false, "ask": "<what is being asked of him, in a few words, or empty>"}';
- claude(S.mFast,q,120).then(function(t){
+ claude(S.mFast,q,400).then(function(t){
   var g=parseJSON(t);
   if(!g||!g.for_me){ showAsk('Heard '+why+' from '+(L.author||'someone')+' at '+clock(L.t)+'. Not a question for you.','','"'+L.text+'"',false); return; }
   answer(g.ask||L.text, L.author);
@@ -300,8 +305,8 @@ function gateThenAnswer(L,why){
 function answer(ask,from){
  showAsk((from?from+' asked: ':'Asked: ')+ask,'Thinking...','',true);
  var q='Recent captions (newest last):\n'+transcript(40)+'\n\nWhat Harsh is being asked: '+ask+'\n\nGive him what to say now. Reply with JSON only: {"say": "<one or two short spoken sentences in his voice>", "source": "<where each fact comes from: tracker item id and date, or the call>", "if_pushed": "<one more useful fact or a safe holding line>"}';
- claude(S.mSmart,q,350).then(function(t){
-  var a=parseJSON(t)||{say:t};
+ claude(S.mSmart,q,1000).then(function(t){
+  var a=parseJSON(t); if(!a||!a.say) a={say:t};
   showAsk((from?from+' asked: ':'Asked: ')+ask,a.say||'',(a.source?'Source: '+a.source:'')+(a.if_pushed?'\nIf pushed: '+a.if_pushed:''),true);
  }).catch(function(e){ showAsk('Asked: '+ask,'','The AI answer failed: '+e.message,true); banner('AI: '+e.message); });
 }
@@ -367,7 +372,7 @@ $('briefBtn').onclick=function(){
  var picked=PACK?(PACK.people||[]).filter(function(p){return chosen[p.name]}).map(function(p){return p.name}):[];
  $('brief').textContent='Thinking...';
  var q='People on this call: '+(picked.join(', ')||'unknown')+'.\nCaptions so far:\n'+(transcript(30)||'(none yet)')+'\n\nWrite Harsh a call card in plain text, at most 8 short lines: for each person, what they are waiting on from Harsh and what he is waiting on from them, with his one-line status in his voice; then up to 2 likely questions with answers. Cite tracker item ids. No preamble.';
- claude(S.mSmart,q,600).then(function(t){ $('brief').textContent=t; }).catch(function(e){ $('brief').textContent='Brief failed: '+e.message; });
+ claude(S.mSmart,q,1500).then(function(t){ $('brief').textContent=t; }).catch(function(e){ $('brief').textContent='Brief failed: '+e.message; });
 };
 
 // ---------- wrap ----------
@@ -377,7 +382,7 @@ $('wrapBtn').onclick=function(){
  $('wrapOut').textContent='Wrapping...';
  var full=lines.map(function(L){ return '['+clock(L.t)+'] '+(L.author||'?')+': '+L.text; }).join('\n');
  var q='Full caption transcript of the call (speaker names from Teams, words can be misheard):\n'+full.slice(-120000)+'\n\nWrite the wrap for Harsh only. Sections, each a short list, "None" when empty:\n1. Asked of Harsh (who asked, what, quote the caption)\n2. What Harsh said he would do (only his own lines, as said)\n3. Decisions that affect his work\n4. Follow-ups to send (to whom, one line each)\n5. Tracker updates to propose (tracker item id, the new log line)\nUse only what the captions say. Keep names, story numbers and dates as said; mark anything unclear (as heard).';
- claude(S.mSmart,q,1500).then(function(t){ wrapText=t; $('wrapOut').textContent=t; $('copyWrap').disabled=false; $('saveWrap').disabled=false; }).catch(function(e){ $('wrapOut').textContent='Wrap failed: '+e.message; });
+ claude(S.mSmart,q,4000).then(function(t){ wrapText=t; $('wrapOut').textContent=t; $('copyWrap').disabled=false; $('saveWrap').disabled=false; }).catch(function(e){ $('wrapOut').textContent='Wrap failed: '+e.message; });
 };
 $('copyWrap').onclick=function(){ if(navigator.clipboard) navigator.clipboard.writeText(wrapText).then(function(){ $('copyWrap').textContent='Copied'; setTimeout(function(){ $('copyWrap').textContent='Copy'; },2000); }); };
 $('saveWrap').onclick=function(){

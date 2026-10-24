@@ -58,10 +58,11 @@ button{font:inherit;padding:6px 10px;border-radius:8px;border:1px solid var(--li
 (function(){
  var SK='https://harsharma27.github.io/sidekick/captest.html';
  var ORIGIN='https://harsharma27.github.io';
- if(window.__skcap){ try{ if(window.__skcap.w&&!window.__skcap.w.closed){ window.__skcap.w.focus(); return; } }catch(e){} clearInterval(window.__skcap.t); }
+ var V=3;
+ if(window.__skcap){ try{ if(window.__skcap.v===V&&window.__skcap.w&&!window.__skcap.w.closed){ window.__skcap.w.focus(); return; } }catch(e){} clearInterval(window.__skcap.t); window.__skcap=null; }
  var w=window.open(SK,'sidekick_cap');
  if(!w){ alert('Sidekick: allow pop-ups for this site, then click the bookmark again.'); return; }
- var seq=0, st={w:w,t:0};
+ var seq=0, st={w:w,t:0,v:V};
  window.__skcap=st;
  function docs(){ var out=[document]; try{ document.querySelectorAll('iframe').forEach(function(f){ try{ if(f.contentDocument) out.push(f.contentDocument); }catch(e){} }); }catch(e){} return out; }
  function txt(el){ return (el&&(el.innerText||el.textContent)||'').replace(/\s+/g,' ').trim(); }
@@ -102,7 +103,7 @@ button{font:inherit;padding:6px 10px;border-radius:8px;border:1px solid var(--li
   docs().some(function(d){ var x=wrapperIn(d); if(x){ wr=x; d0=d; return true; } return false; });
   var caps=[], mode='none';
   if(wr){ caps=items(wr); mode='structured'; if(!caps.length){ caps=fallbackLines(wr); mode='fallback'; } }
-  var msg={sk:'cap1',title:document.title,at:Date.now(),mode:mode,caps:caps.slice(-12)};
+  var msg={sk:'cap1',v:V,title:document.title,at:Date.now(),mode:mode,caps:caps.slice(-12)};
   if(tick%5===1){ msg.people=people(d0); msg.diag=diag(d0,wr,mode,caps.length); }
   try{ w.postMessage(msg,ORIGIN); }catch(e){}
  },1000);
@@ -130,7 +131,7 @@ button{font:inherit;padding:6px 10px;border-radius:8px;border:1px solid var(--li
   if(!OK.test(ev.origin)) return;
   var m=ev.data; if(!m||m.sk!=='cap1') return;
   last=Date.now();
-  $('meta').textContent='Tab: '+(m.title||'')+' | read mode: '+m.mode;
+  $('meta').textContent='Tab: '+(m.title||'')+' | read mode: '+m.mode+' | bookmark version: '+(m.v||1);
   var changed=false;
   (m.caps||[]).forEach(function(c){
    var key=cur[c.id]||c.id, L=lines[key];

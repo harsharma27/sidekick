@@ -1,0 +1,393 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Sidekick Live</title>
+<style>
+:root{--bg:#fff;--fg:#1d1d1f;--muted:#6b6b70;--line:#e3e3e6;--card:#fafafb;--ok:#127a3e;--warn:#9a6a00;--bad:#b3261e;--hot:#fff4d6;--chip:#f0f0f3;--accent:#2457c5}
+@media (prefers-color-scheme:dark){:root{--bg:#141416;--fg:#ececf0;--muted:#9a9aa2;--line:#2c2c31;--card:#1b1b1f;--ok:#4cc27e;--warn:#e0b04a;--bad:#ff7a70;--hot:#3a3016;--chip:#26262b;--accent:#8fb0ff}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+main{max-width:820px;margin:0 auto;padding:12px 16px 40px}
+h1{font-size:18px;margin:0}
+header{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px}
+.pill{font-size:12px;padding:3px 8px;border-radius:999px;background:var(--chip);color:var(--muted)}
+.pill.ok{color:var(--ok)} .pill.warn{color:var(--warn)} .pill.bad{color:var(--bad)}
+.card{border:1px solid var(--line);background:var(--card);border-radius:12px;padding:12px;margin-bottom:12px}
+.card h2{font-size:13px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);margin:0 0 8px}
+#ask.hot{background:var(--hot)}
+#askSay{font-size:19px;font-weight:600;margin:4px 0}
+.muted{color:var(--muted);font-size:13px}
+input[type=text],input[type=password],input[type=number]{width:100%;font:inherit;padding:8px 10px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--fg)}
+button{font:inherit;padding:7px 12px;border-radius:8px;border:1px solid var(--line);background:var(--chip);color:var(--fg);cursor:pointer}
+button.primary{background:var(--accent);color:#fff;border-color:var(--accent)}
+button:disabled{opacity:.5;cursor:default}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.res{border-top:1px solid var(--line);padding:8px 0}
+.res:first-child{border-top:0}
+.res b{font-weight:600}
+.chips{display:flex;gap:6px;flex-wrap:wrap;margin:6px 0}
+.chip{padding:4px 10px;border-radius:999px;background:var(--chip);border:1px solid var(--line);cursor:pointer;font-size:13px}
+.chip.on{background:var(--accent);color:#fff;border-color:var(--accent)}
+#tx{max-height:260px;overflow:auto;font-size:13px}
+#tx div{margin:2px 0}
+pre{white-space:pre-wrap;word-break:break-word;margin:0;font:inherit}
+details summary{cursor:pointer;color:var(--muted);font-size:13px}
+label{display:block;font-size:13px;color:var(--muted);margin:8px 0 3px}
+a.bm{display:inline-block;padding:7px 12px;border-radius:8px;background:var(--chip);color:var(--fg);text-decoration:none;font-weight:600;border:1px dashed var(--muted)}
+#banner{display:none;background:var(--bad);color:#fff;padding:8px 12px;border-radius:10px;margin-bottom:10px;font-weight:600}
+</style>
+</head>
+<body>
+<main>
+<header>
+ <h1>Sidekick Live</h1>
+ <span class="pill" id="capPill">Captions: waiting</span>
+ <span class="pill" id="packPill">Pack: not loaded</span>
+ <span class="pill" id="aiPill">AI: 0 calls today</span>
+</header>
+<div id="banner"></div>
+
+<div class="card" id="ask">
+ <h2>Asked of you</h2>
+ <div id="askWho" class="muted">Nothing yet. Alerts appear when your name or one of your stories comes up.</div>
+ <div id="askSay"></div>
+ <div id="askMore" class="muted"></div>
+ <div class="row" style="margin-top:8px">
+  <button id="askedBtn" class="primary">I've been asked</button>
+  <button id="dismissBtn">Dismiss</button>
+ </div>
+</div>
+
+<div class="card">
+ <h2>Look up</h2>
+ <input type="text" id="q" placeholder="Story number, person or topic, e.g. 45532, Bharat, KT" autocomplete="off">
+ <div id="results"></div>
+</div>
+
+<div class="card">
+ <h2>This call</h2>
+ <div class="muted">People heard in captions are added automatically. Tap to add or remove.</div>
+ <div class="chips" id="people"></div>
+ <div id="cardList"></div>
+ <div class="row" style="margin-top:8px"><button id="briefBtn">Brief me (AI)</button></div>
+ <pre id="brief" class="muted" style="margin-top:8px"></pre>
+</div>
+
+<div class="card">
+ <h2>Wrap</h2>
+ <div class="row"><button id="wrapBtn">Wrap this call</button><button id="copyWrap" disabled>Copy</button><button id="saveWrap" disabled>Save to Drive</button><button id="newCall">New call</button></div>
+ <pre id="wrapOut" style="margin-top:8px" class="muted">After the call, tap Wrap: what was asked of you, what you committed to, decisions, follow-ups and tracker updates.</pre>
+</div>
+
+<div class="card">
+ <details><summary>Transcript (<span id="txCount">0</span> lines)</summary><div id="tx"></div></details>
+</div>
+
+<div class="card">
+ <details id="setup"><summary>Setup and settings</summary>
+  <p><b>Bookmark (once):</b> drag this onto the Brave bookmarks bar, then click it on the Teams meeting tab after turning on live captions.</p>
+  <p><a class="bm" id="bm" href="#">Sidekick live</a></p>
+  <label>Anthropic API key (kept in this browser only)</label><input type="password" id="apikey">
+  <label>Google client ID (for the Drive pack and wraps)</label><input type="text" id="gcid">
+  <label>Drive folder ID (Sidekick folder)</label><input type="text" id="gfolder">
+  <label>Your name forms in captions, comma-separated</label><input type="text" id="names" placeholder="Harsh, Harsha, Sharma, Harsh">
+  <label>Fast model (is it for me?)</label><input type="text" id="mFast">
+  <label>Answer model (say-lines, brief, wrap)</label><input type="text" id="mSmart">
+  <label>Daily AI call cap</label><input type="number" id="cap" min="10" max="2000">
+  <div class="row" style="margin-top:10px">
+   <button id="saveBtn" class="primary">Save settings</button>
+   <button id="driveBtn">Connect Drive and load pack</button>
+   <label style="margin:0"><input type="file" id="packFile" accept=".json" style="display:none"><span class="chip">Load pack from a file</span></label>
+  </div>
+  <div class="muted" id="setStatus" style="margin-top:6px"></div>
+ </details>
+</div>
+<p class="muted">Captions are read from your own Teams tab by the bookmark. Only when something is aimed at you, or you tap a button, are the recent caption lines sent with your context pack to Claude through your API key. Wraps are saved to your Drive folder only when you tap Save.</p>
+</main>
+
+<script type="text/plain" id="bmsrc">
+(function(){
+ var SK='https://harsharma27.github.io/sidekick/live.html', ORIGIN='https://harsharma27.github.io', V=10;
+ if(window.__skcap){ try{ if(window.__skcap.v===V&&window.__skcap.w&&!window.__skcap.w.closed){ window.__skcap.w.focus(); return; } }catch(e){} clearInterval(window.__skcap.t); window.__skcap=null; }
+ var w=window.open(SK,'sidekick_live');
+ if(!w){ alert('Sidekick: allow pop-ups for this site, then click the bookmark again.'); return; }
+ var seq=0, st={w:w,t:0,v:V}; window.__skcap=st;
+ function txt(el){ return (el&&(el.innerText||el.textContent)||'').replace(/\s+/g,' ').trim(); }
+ function wrapper(){ return document.querySelector('[data-tid="closed-caption-renderer-wrapper"],[data-tid="closed-caption-v2-window-wrapper"]')||document.querySelector('[data-tid*="closed-caption"]'); }
+ function items(wr){
+  var out=[], seen=[];
+  wr.querySelectorAll('[data-tid="closed-caption-text"]').forEach(function(t){
+   var it=t.closest('[data-tid="closed-captions-v2-items-renderer"]')||(t.parentElement&&t.parentElement.parentElement)||t.parentElement;
+   if(!it||seen.indexOf(it)>-1) return; seen.push(it);
+   var text=txt(t); if(!text) return;
+   var a=it.querySelector('[data-tid="author"],[data-tid*="author"],.ui-chat__message__author'), author=a?txt(a):'';
+   if(!author){ var full=txt(it), i=full.lastIndexOf(text); author=(i>-1?full.slice(0,i):full).replace(/^[A-Z]{1,3}\s+/,'').trim(); }
+   if(!it.dataset.skid) it.dataset.skid='c'+(++seq);
+   out.push({id:it.dataset.skid,author:author,text:text});
+  });
+  return out;
+ }
+ st.t=setInterval(function(){
+  if(w.closed){ clearInterval(st.t); window.__skcap=null; return; }
+  var wr=wrapper(), caps=wr?items(wr):[];
+  try{ w.postMessage({sk:'cap1',v:V,title:document.title,at:Date.now(),mode:wr?'structured':'none',caps:caps.slice(-12)},ORIGIN); }catch(e){}
+ },1000);
+})();
+</script>
+
+<script>
+(function(){
+'use strict';
+var $=function(id){return document.getElementById(id)};
+var S={apikey:'',gcid:'',gfolder:'',names:'Harsh, Harsha, Sharma, Harsh',mFast:'claude-haiku-5-5',mSmart:'claude-sonnet-5-5',cap:200};
+var KEY='sidekick_live';
+try{ var old=JSON.parse(localStorage.getItem('sidekick')||'null'); if(old){ S.apikey=old.apikey||''; S.gcid=old.gcid||''; S.gfolder=old.gfolder||''; } }catch(e){}
+try{ var s=JSON.parse(localStorage.getItem(KEY)||'null'); if(s) Object.keys(s).forEach(function(k){ S[k]=s[k]; }); }catch(e){}
+['apikey','gcid','gfolder','names','mFast','mSmart','cap'].forEach(function(k){ $(k).value=S[k]; });
+function saveSettings(){ ['apikey','gcid','gfolder','names','mFast','mSmart'].forEach(function(k){ S[k]=$(k).value.trim(); }); S.cap=parseInt($('cap').value,10)||200; try{ localStorage.setItem(KEY,JSON.stringify(S)); }catch(e){} }
+$('saveBtn').onclick=function(){ saveSettings(); $('setStatus').textContent='Saved.'; };
+if(!S.apikey||!S.gcid) $('setup').open=true;
+
+// bookmarklet
+$('bm').href='javascript:'+encodeURIComponent($('bmsrc').textContent.trim());
+$('bm').onclick=function(e){ e.preventDefault(); alert('Drag this button to the bookmarks bar, then click it on the Teams tab.'); };
+
+function banner(m){ var b=$('banner'); if(!m){ b.style.display='none'; return; } b.textContent=m; b.style.display='block'; }
+function pad(n){return (n<10?'0':'')+n}
+function clock(t){var d=new Date(t);return pad(d.getHours())+':'+pad(d.getMinutes())}
+function norm(s){ return (s||'').toLowerCase().replace(/[^a-z0-9 ]/g,' ').replace(/\s+/g,' ').trim(); }
+function el(tag,cls,text){ var e=document.createElement(tag); if(cls) e.className=cls; if(text!=null) e.textContent=text; return e; }
+
+// ---------- context pack ----------
+var PACK=null, packAt=0;
+function setPack(p,where){
+ if(!p||!p.items){ banner('That file is not a Sidekick pack.'); return; }
+ PACK=p; packAt=Date.now();
+ $('packPill').textContent='Pack: '+p.items.length+' items, built '+(p.built||'?')+' ('+where+')'; $('packPill').className='pill ok';
+ try{ localStorage.setItem(KEY+'_pack',JSON.stringify(p)); }catch(e){}
+ storyDigits=collectDigits(); renderCard(); runLookup();
+}
+try{ var cached=JSON.parse(localStorage.getItem(KEY+'_pack')||'null'); if(cached){ PACK=cached; $('packPill').textContent='Pack: '+cached.items.length+' items, built '+(cached.built||'?')+' (saved copy)'; $('packPill').className='pill warn'; } }catch(e){}
+$('packFile').onchange=function(){ var f=this.files[0]; if(!f) return; f.text().then(function(t){ try{ setPack(JSON.parse(t),'file'); }catch(e){ banner('Could not read that file as JSON.'); } }); };
+var storyDigits=collectDigits();
+function collectDigits(){
+ var d={}; if(!PACK) return d;
+ function add(s){ (s||'').replace(/CMCM[- ]?(\d{3,6})/gi,function(_,n){ d[n]=1; return _; }); }
+ PACK.items.forEach(function(i){ if(i.owner==='Harsh'||i.court==='Harsh'){ add(i.key); add(i.title); } });
+ (PACK.stories||[]).forEach(function(s){ add(s.key); add(s.cp); });
+ return d;
+}
+
+// ---------- Drive ----------
+var gToken=null, gExp=0, gClient=null;
+function driveLive(){ return gToken && Date.now()<gExp; }
+function loadGIS(cb){ if(window.google&&google.accounts&&google.accounts.oauth2) return cb(); var sc=document.createElement('script'); sc.src='https://accounts.google.com/gsi/client'; sc.onload=cb; sc.onerror=function(){ banner('Could not load Google sign-in.'); }; document.head.appendChild(sc); }
+function connectDrive(then){
+ saveSettings();
+ if(!S.gcid){ banner('Add the Google client ID in settings first.'); return; }
+ loadGIS(function(){
+  if(!gClient) gClient=google.accounts.oauth2.initTokenClient({client_id:S.gcid,scope:'https://www.googleapis.com/auth/drive.readonly https://www.googleapis.com/auth/drive.file',callback:function(r){ if(r&&r.access_token){ gToken=r.access_token; gExp=Date.now()+((r.expires_in||3600)-60)*1000; banner(''); if(gClient._then){ var f=gClient._then; gClient._then=null; f(); } } else banner('Drive sign-in failed.'); }});
+  gClient._then=then; gClient.requestAccessToken({prompt:''});
+ });
+}
+function gfetch(url,opts){ opts=opts||{}; opts.headers=Object.assign({Authorization:'Bearer '+gToken},opts.headers||{}); return fetch(url,opts).then(function(r){ if(!r.ok) throw new Error('Drive HTTP '+r.status); return r; }); }
+function loadPackFromDrive(){
+ if(!S.gfolder){ banner('Add the Drive folder ID in settings.'); return; }
+ var q=encodeURIComponent("'"+S.gfolder+"' in parents and name contains 'sidekick-pack' and trashed=false");
+ gfetch('https://www.googleapis.com/drive/v3/files?q='+q+'&orderBy=createdTime%20desc&pageSize=1&fields=files(id,name,createdTime)')
+  .then(function(r){return r.json()}).then(function(j){ var f=j.files&&j.files[0]; if(!f) throw new Error('no sidekick-pack file in the folder'); return gfetch('https://www.googleapis.com/drive/v3/files/'+f.id+'?alt=media'); })
+  .then(function(r){return r.json()}).then(function(p){ setPack(p,'Drive'); $('setStatus').textContent='Pack loaded from Drive.'; })
+  .catch(function(e){ banner('Pack not loaded: '+e.message); });
+}
+$('driveBtn').onclick=function(){ connectDrive(loadPackFromDrive); };
+function driveSave(name,text){
+ var b='skb'+Date.now(), meta={name:name,parents:[S.gfolder],mimeType:'text/plain'};
+ var body='--'+b+'\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n'+JSON.stringify(meta)+'\r\n--'+b+'\r\nContent-Type: text/plain; charset=UTF-8\r\n\r\n'+text+'\r\n--'+b+'--';
+ return gfetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart',{method:'POST',headers:{'Content-Type':'multipart/related; boundary='+b},body:body});
+}
+
+// ---------- captions ----------
+var OK=/^https:\/\/([a-z0-9-]+\.)*(teams\.cloud\.microsoft|teams\.microsoft\.com|teams\.live\.com)$/;
+var lines=[], byKey={}, cur={}, gen=0, lastMsg=0, heardPeople={};
+function myNames(){ return S.names.split(',').map(function(x){return norm(x)}).filter(Boolean); }
+function isMe(author){ var a=norm(author); return a==='sharma harsh'||a==='harsh sharma'||(PACK&&PACK.me&&a===norm(PACK.me.teams_name)); }
+window.addEventListener('message',function(ev){
+ if(!OK.test(ev.origin)) return;
+ var m=ev.data; if(!m||m.sk!=='cap1') return;
+ lastMsg=Date.now();
+ (m.caps||[]).forEach(function(c){
+  var key=cur[c.id]||c.id, L=byKey[key];
+  if(L&&L.text!==c.text){ var a=norm(L.text), b=norm(c.text), k=Math.min(12,a.length,b.length); if(L.author!==c.author||a.slice(0,k)!==b.slice(0,k)){ key=c.id+'#'+(++gen); cur[c.id]=key; L=null; } }
+  if(!L){ L={key:key,author:c.author,text:c.text,t:Date.now(),changed:Date.now(),checked:false}; byKey[key]=L; lines.push(L); cur[c.id]=key; notePerson(c.author); renderTx(); }
+  else if(L.text!==c.text){ L.text=c.text; L.changed=Date.now(); L.checked=false; renderTx(); }
+ });
+});
+function notePerson(author){ if(!author||isMe(author)) return; if(!heardPeople[author]){ heardPeople[author]=1; var p=matchPerson(author); if(p) chosen[p.name]=true; renderCard(); } }
+function renderTx(){
+ var box=$('tx'); box.textContent='';
+ lines.slice(-80).forEach(function(L){ var d=el('div'); var b=el('b',null,(L.author||'?')+': '); d.appendChild(b); d.appendChild(document.createTextNode(L.text)); box.appendChild(d); });
+ $('txCount').textContent=lines.length; box.scrollTop=box.scrollHeight;
+}
+function transcript(n){ return lines.slice(-(n||40)).map(function(L){ return '['+clock(L.t)+'] '+(L.author||'?')+': '+L.text; }).join('\n'); }
+
+// a line is settled when Teams stops changing it for 2.5 s
+setInterval(function(){
+ var age=lastMsg?Math.round((Date.now()-lastMsg)/1000):-1;
+ var p=$('capPill');
+ if(age<0){ p.textContent='Captions: waiting for the bookmark'; p.className='pill warn'; }
+ else if(age<5){ p.textContent='Captions: live'; p.className='pill ok'; }
+ else { p.textContent='Captions: no update '+age+' s'; p.className='pill bad'; }
+ var now=Date.now();
+ lines.forEach(function(L){ if(!L.checked && now-L.changed>2500){ L.checked=true; checkLine(L); } });
+},1000);
+
+// ---------- triggers ----------
+var lastNameAt=0, lastAlertAt=0;
+function mentionsMe(text){ var t=' '+norm(text)+' '; return myNames().some(function(n){ return n && t.indexOf(' '+n+' ')>-1; }); }
+function mentionsStory(text){ var hit=null; (text||'').replace(/(\d{3,6})/g,function(_,n){ if(!hit&&storyDigits[n]) hit='CMCM-'+n; return _; }); return hit; }
+function checkLine(L){
+ if(isMe(L.author)) return;
+ var why=null;
+ if(mentionsMe(L.text)){ why='your name'; lastNameAt=Date.now(); }
+ else { var s=mentionsStory(L.text); if(s) why=s; }
+ if(!why && /\?\s*$/.test(L.text) && Date.now()-lastNameAt<30000) why='a question after your name';
+ if(!why) return;
+ if(Date.now()-lastAlertAt<15000) return;
+ lastAlertAt=Date.now();
+ gateThenAnswer(L,why);
+}
+
+// ---------- Claude ----------
+var RULES='You support Harsh during a live Illumina CMCM Field Service work call. You get a Teams live-caption transcript with speaker names (captions can mishear words) and his CONTEXT PACK, a JSON export of his activity tracker: open items, whose court the ball is in, dates and log lines. '+
+ 'Ground every fact in the transcript or the pack. When you use the pack, cite the item and log date, for example (tracker g24, 23 Oct). Never invent status, owners, dates or decisions. If the pack does not cover it, say so plainly and give a safe holding line. '+
+ 'Stay in his lane as a junior BSA: functional scope, FR status, what he has checked, who he is waiting on. Never volunteer him for development, QA execution, root cause diagnosis or another owner\'s decision. '+
+ 'Spoken lines follow his voice: plain, polite, short sentences, full CMCM- prefix on story numbers, no em dashes, no jargon he would not use.';
+var usage=loadUsage();
+function today(){ var d=new Date(); return d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate()); }
+function loadUsage(){ try{ var u=JSON.parse(localStorage.getItem(KEY+'_usage')||'null'); if(u&&u.day===today()) return u; }catch(e){} return {day:today(),calls:0,inTok:0,cacheTok:0,outTok:0}; }
+function renderUsage(){ $('aiPill').textContent='AI: '+usage.calls+' calls today ('+Math.round((usage.inTok+usage.cacheTok)/1000)+'k in, '+Math.round(usage.outTok/1000)+'k out)'; $('aiPill').className='pill'+(usage.calls>=S.cap?' bad':''); }
+renderUsage();
+function claude(model,userText,maxTok){
+ if(!S.apikey) return Promise.reject(new Error('Add your Anthropic API key in settings.'));
+ if(usage.day!==today()) usage=loadUsage();
+ if(usage.calls>=S.cap) return Promise.reject(new Error('Daily AI cap reached ('+S.cap+'). Raise it in settings if needed.'));
+ var system=[{type:'text',text:RULES}];
+ if(PACK) system.push({type:'text',text:'CONTEXT PACK (built '+(PACK.built||'?')+'):\n'+JSON.stringify(PACK),cache_control:{type:'ephemeral'}});
+ usage.calls++; renderUsage();
+ var ctl=new AbortController(), timer=setTimeout(function(){ ctl.abort(); },60000);
+ return fetch('https://api.anthropic.com/v1/messages',{method:'POST',signal:ctl.signal,headers:{'content-type':'application/json','x-api-key':S.apikey,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},
+  body:JSON.stringify({model:model,max_tokens:maxTok||400,system:system,messages:[{role:'user',content:userText}]})})
+  .then(function(r){ return r.json().then(function(j){ clearTimeout(timer); if(!r.ok) throw new Error((j.error&&j.error.message)||('API HTTP '+r.status)); return j; }); })
+  .then(function(j){
+   var u=j.usage||{}; usage.inTok+=(u.input_tokens||0)+(u.cache_creation_input_tokens||0); usage.cacheTok+=(u.cache_read_input_tokens||0); usage.outTok+=(u.output_tokens||0);
+   try{ localStorage.setItem(KEY+'_usage',JSON.stringify(usage)); }catch(e){} renderUsage(); banner('');
+   return (j.content||[]).filter(function(c){return c.type==='text'}).map(function(c){return c.text}).join('\n').trim();
+  },function(e){ clearTimeout(timer); throw e.name==='AbortError'?new Error('The AI request timed out.'):e; });
+}
+function parseJSON(t){ var m=(t||'').match(/\{[\s\S]*\}/); if(!m) return null; try{ return JSON.parse(m[0]); }catch(e){ return null; } }
+function showAsk(who,say,more,hot){ $('askWho').textContent=who; $('askSay').textContent=say||''; $('askMore').textContent=more||''; $('ask').classList.toggle('hot',!!hot); }
+function gateThenAnswer(L,why){
+ showAsk('Heard '+why+' from '+(L.author||'someone')+' at '+clock(L.t)+': "'+L.text+'". Checking...','','',true);
+ var q='Recent captions (newest last):\n'+transcript(25)+'\n\nThe line that triggered this: '+(L.author||'?')+': '+L.text+'\n\nIs Harsh being asked something, or about to be assigned or assumed to own something, right now? Reply with JSON only: {"for_me": true|false, "ask": "<what is being asked of him, in a few words, or empty>"}';
+ claude(S.mFast,q,120).then(function(t){
+  var g=parseJSON(t);
+  if(!g||!g.for_me){ showAsk('Heard '+why+' from '+(L.author||'someone')+' at '+clock(L.t)+'. Not a question for you.','','"'+L.text+'"',false); return; }
+  answer(g.ask||L.text, L.author);
+ }).catch(function(e){ showAsk('Heard '+why+' at '+clock(L.t)+', but the AI check failed.','','"'+L.text+'"',true); banner('AI: '+e.message); });
+}
+function answer(ask,from){
+ showAsk((from?from+' asked: ':'Asked: ')+ask,'Thinking...','',true);
+ var q='Recent captions (newest last):\n'+transcript(40)+'\n\nWhat Harsh is being asked: '+ask+'\n\nGive him what to say now. Reply with JSON only: {"say": "<one or two short spoken sentences in his voice>", "source": "<where each fact comes from: tracker item id and date, or the call>", "if_pushed": "<one more useful fact or a safe holding line>"}';
+ claude(S.mSmart,q,350).then(function(t){
+  var a=parseJSON(t)||{say:t};
+  showAsk((from?from+' asked: ':'Asked: ')+ask,a.say||'',(a.source?'Source: '+a.source:'')+(a.if_pushed?'\nIf pushed: '+a.if_pushed:''),true);
+ }).catch(function(e){ showAsk('Asked: '+ask,'','The AI answer failed: '+e.message,true); banner('AI: '+e.message); });
+}
+$('askedBtn').onclick=function(){ if(!lines.length){ banner('No captions yet. Click the bookmark on the Teams tab.'); return; } answer('the latest question in the captions, addressed to Harsh',null); };
+$('dismissBtn').onclick=function(){ showAsk('Nothing new.','','',false); };
+
+// ---------- look up (no AI) ----------
+function itemText(i){ return [i.id,i.key,i.title,i.court,i.owner,i.group,(i.log||[]).map(function(l){return l.t}).join(' ')].join(' '); }
+function search(q){
+ if(!PACK) return [];
+ var words=norm(q).split(' ').filter(Boolean); if(!words.length) return [];
+ var out=[];
+ PACK.items.forEach(function(i){
+  var t=norm(itemText(i)), score=0;
+  words.forEach(function(w){ if(/^\d+$/.test(w)){ if(t.indexOf(w)>-1) score+=5; } else if(t.indexOf(w)>-1) score+=(norm(i.title).indexOf(w)>-1?3:1); });
+  if(score){ if(i.status==='open'||i.status==='waiting') score+=4; out.push({i:i,score:score}); }
+ });
+ return out.sort(function(a,b){return b.score-a.score}).slice(0,6).map(function(x){return x.i});
+}
+function itemBox(i){
+ var d=el('div','res');
+ var h=el('div'); h.appendChild(el('b',null,i.title)); d.appendChild(h);
+ d.appendChild(el('div','muted',[i.id, i.status, i.court?('ball: '+i.court):'', i.due?('due '+i.due):'', i.chase?('chase '+i.chase):''].filter(Boolean).join(' | ')));
+ var last=(i.log||[]).slice(-1)[0]; if(last) d.appendChild(el('div',null,last.d+': '+last.t));
+ return d;
+}
+function personBox(p){ var d=el('div','res'); var h=el('div'); h.appendChild(el('b',null,p.name)); d.appendChild(h); d.appendChild(el('div','muted',p.role||'')); return d; }
+function runLookup(){
+ var q=$('q').value, box=$('results'); box.textContent='';
+ if(!q.trim()) return;
+ if(!PACK){ box.appendChild(el('div','muted','No pack loaded yet. Open settings and tap Connect Drive and load pack.')); return; }
+ var nq=norm(q); (PACK.people||[]).forEach(function(p){ if([p.name].concat(p.aliases||[]).some(function(a){ var n=norm(a); return n && (nq===n || nq.indexOf(n)>-1 || n.indexOf(nq)===0); })) box.appendChild(personBox(p)); });
+ var r=search(q); if(!r.length && !box.childNodes.length) box.appendChild(el('div','muted','Nothing in the pack for that.'));
+ r.forEach(function(i){ box.appendChild(itemBox(i)); });
+}
+$('q').addEventListener('input',runLookup);
+
+// ---------- this call ----------
+var chosen={};
+function matchPerson(author){
+ if(!PACK) return null; var a=norm(author);
+ return (PACK.people||[]).filter(function(p){ return [p.name].concat(p.aliases||[]).some(function(x){ var n=norm(x); return n && (' '+a+' ').indexOf(' '+n+' ')>-1; }); })[0]||null;
+}
+function personItems(p){
+ var names=[p.name].concat(p.aliases||[]).map(norm);
+ return PACK.items.filter(function(i){ if(!(i.status==='open'||i.status==='waiting')) return false; var t=norm(itemText(i)); return names.some(function(n){ return n.length>2 && t.indexOf(n)>-1; }); }).slice(0,5);
+}
+function renderCard(){
+ var chips=$('people'); chips.textContent='';
+ if(!PACK){ chips.appendChild(el('span','muted','Load the pack to see people.')); return; }
+ (PACK.people||[]).forEach(function(p){ var c=el('span','chip'+(chosen[p.name]?' on':''),p.name.split(' ')[0]); c.title=p.role||''; c.onclick=function(){ chosen[p.name]=!chosen[p.name]; renderCard(); }; chips.appendChild(c); });
+ var box=$('cardList'); box.textContent='';
+ var picked=(PACK.people||[]).filter(function(p){return chosen[p.name]});
+ if(!picked.length){ box.appendChild(el('div','muted','Pick who is on the call, or wait for captions to fill it in.')); return; }
+ picked.forEach(function(p){
+  var h=el('div',null); h.style.marginTop='8px'; h.appendChild(el('b',null,p.name)); h.appendChild(el('span','muted',' '+(p.role||''))); box.appendChild(h);
+  var its=personItems(p); if(!its.length) box.appendChild(el('div','muted','No open items mention them.'));
+  its.forEach(function(i){ box.appendChild(itemBox(i)); });
+ });
+}
+renderCard();
+$('briefBtn').onclick=function(){
+ var picked=PACK?(PACK.people||[]).filter(function(p){return chosen[p.name]}).map(function(p){return p.name}):[];
+ $('brief').textContent='Thinking...';
+ var q='People on this call: '+(picked.join(', ')||'unknown')+'.\nCaptions so far:\n'+(transcript(30)||'(none yet)')+'\n\nWrite Harsh a call card in plain text, at most 8 short lines: for each person, what they are waiting on from Harsh and what he is waiting on from them, with his one-line status in his voice; then up to 2 likely questions with answers. Cite tracker item ids. No preamble.';
+ claude(S.mSmart,q,600).then(function(t){ $('brief').textContent=t; }).catch(function(e){ $('brief').textContent='Brief failed: '+e.message; });
+};
+
+// ---------- wrap ----------
+var wrapText='';
+$('wrapBtn').onclick=function(){
+ if(!lines.length){ $('wrapOut').textContent='No captions captured yet.'; return; }
+ $('wrapOut').textContent='Wrapping...';
+ var full=lines.map(function(L){ return '['+clock(L.t)+'] '+(L.author||'?')+': '+L.text; }).join('\n');
+ var q='Full caption transcript of the call (speaker names from Teams, words can be misheard):\n'+full.slice(-120000)+'\n\nWrite the wrap for Harsh only. Sections, each a short list, "None" when empty:\n1. Asked of Harsh (who asked, what, quote the caption)\n2. What Harsh said he would do (only his own lines, as said)\n3. Decisions that affect his work\n4. Follow-ups to send (to whom, one line each)\n5. Tracker updates to propose (tracker item id, the new log line)\nUse only what the captions say. Keep names, story numbers and dates as said; mark anything unclear (as heard).';
+ claude(S.mSmart,q,1500).then(function(t){ wrapText=t; $('wrapOut').textContent=t; $('copyWrap').disabled=false; $('saveWrap').disabled=false; }).catch(function(e){ $('wrapOut').textContent='Wrap failed: '+e.message; });
+};
+$('copyWrap').onclick=function(){ if(navigator.clipboard) navigator.clipboard.writeText(wrapText).then(function(){ $('copyWrap').textContent='Copied'; setTimeout(function(){ $('copyWrap').textContent='Copy'; },2000); }); };
+$('saveWrap').onclick=function(){
+ var d=new Date(), stamp=d.getFullYear()+pad(d.getMonth()+1)+pad(d.getDate())+'-'+pad(d.getHours())+pad(d.getMinutes());
+ var full=lines.map(function(L){ return '['+clock(L.t)+'] '+(L.author||'?')+': '+L.text; }).join('\n');
+ function go(){ driveSave('wrap-'+stamp+'.txt',wrapText).then(function(){ return driveSave('transcript-'+stamp+'.txt',full); }).then(function(){ $('saveWrap').textContent='Saved'; }).catch(function(e){ banner('Not saved: '+e.message); }); }
+ if(driveLive()) go(); else connectDrive(go);
+};
+$('newCall').onclick=function(){ if(lines.length && !confirm('Clear this call\'s captions and people?')) return; lines=[]; byKey={}; cur={}; heardPeople={}; chosen={}; wrapText=''; renderTx(); renderCard(); $('wrapOut').textContent='New call. Tap Wrap at the end.'; $('copyWrap').disabled=true; $('saveWrap').disabled=true; $('saveWrap').textContent='Save to Drive'; showAsk('Nothing yet.','','',false); };
+})();
+</script>
+</body>
+</html>

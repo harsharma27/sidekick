@@ -304,10 +304,11 @@ function gateThenAnswer(L,why){
 }
 function answer(ask,from){
  showAsk((from?from+' asked: ':'Asked: ')+ask,'Thinking...','',true);
- var q='Recent captions (newest last):\n'+transcript(40)+'\n\nWhat Harsh is being asked: '+ask+'\n\nGive him what to say now. Reply with JSON only: {"say": "<one or two short spoken sentences in his voice>", "source": "<where each fact comes from: tracker item id and date, or the call>", "if_pushed": "<one more useful fact or a safe holding line>"}';
+ var q='Recent captions (newest last):\n'+transcript(40)+'\n\nWhat Harsh is being asked: '+ask+'\n\nGive him what to say now. Rules for the reply: say = what he says out loud now, at most 2 short sentences and 35 words, answering only what was asked, nothing about his own to-dos or internal follow-ups unless asked. source = item ids and dates only, e.g. "g24 23 Oct; call" (no commentary). if_pushed = one sentence. Reply with JSON only: {"say": "...", "source": "...", "if_pushed": "..."}';
+ var t0=Date.now();
  claude(S.mSmart,q,1000).then(function(t){
   var a=parseJSON(t); if(!a||!a.say) a={say:t};
-  showAsk((from?from+' asked: ':'Asked: ')+ask,a.say||'',(a.source?'Source: '+a.source:'')+(a.if_pushed?'\nIf pushed: '+a.if_pushed:''),true);
+  showAsk((from?from+' asked: ':'Asked: ')+ask,a.say||'',(a.source?'Source: '+a.source:'')+(a.if_pushed?'\nIf pushed: '+a.if_pushed:'')+'\n('+Math.round((Date.now()-t0)/1000)+' s)',true);
  }).catch(function(e){ showAsk('Asked: '+ask,'','The AI answer failed: '+e.message,true); banner('AI: '+e.message); });
 }
 $('askedBtn').onclick=function(){ if(!lines.length){ banner('No captions yet. Click the bookmark on the Teams tab.'); return; } answer('the latest question in the captions, addressed to Harsh',null); };

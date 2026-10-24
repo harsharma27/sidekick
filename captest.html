@@ -67,14 +67,14 @@ button{font:inherit;padding:6px 10px;border-radius:8px;border:1px solid var(--li
  function txt(el){ return (el&&(el.innerText||el.textContent)||'').replace(/\s+/g,' ').trim(); }
  function wrapperIn(d){ return d.querySelector('[data-tid="closed-caption-v2-window-wrapper"],[data-tid="closed-captions-renderer"],[data-tid="closed-caption-renderer-wrapper"]')||d.querySelector('[data-tid*="closed-caption"],[data-tid*="closedCaption"]'); }
  function items(wr){
-  var list=wr.querySelectorAll('[data-tid="closed-caption-message"],.ui-chat__item,[class*="ChatMessageCompact"]');
-  var out=[];
-  list.forEach(function(it){
-   var a=it.querySelector('[data-tid="author"],.ui-chat__message__author,[class*="author" i]');
-   var t=it.querySelector('[data-tid="closed-caption-text"],[class*="captionText" i],[class*="text" i]:not([class*="author" i])');
-   var author=txt(a), text=txt(t);
-   if(!text){ var all=txt(it); text=author&&all.indexOf(author)===0?all.slice(author.length).trim():all; }
-   if(!text) return;
+  var out=[], seen=[];
+  wr.querySelectorAll('[data-tid="closed-caption-text"]').forEach(function(t){
+   var it=t.closest('[data-tid="closed-captions-v2-items-renderer"]')||t.parentElement&&t.parentElement.parentElement||t.parentElement;
+   if(!it||seen.indexOf(it)>-1) return; seen.push(it);
+   var text=txt(t); if(!text) return;
+   var a=it.querySelector('[data-tid="author"],[data-tid*="author"],.ui-chat__message__author');
+   var author=a?txt(a):'';
+   if(!author){ var full=txt(it), i=full.lastIndexOf(text); author=(i>-1?full.slice(0,i):full).replace(/^[A-Z]{1,3}\s+/,'').trim(); }
    if(!it.dataset.skid) it.dataset.skid='c'+(++seq);
    out.push({id:it.dataset.skid,author:author,text:text});
   });
@@ -117,7 +117,7 @@ button{font:inherit;padding:6px 10px;border-radius:8px;border:1px solid var(--li
  $('bm').addEventListener('click',function(e){ e.preventDefault(); alert('Drag this button to the bookmarks bar, then click it on the Teams tab.'); });
 
  var OK=/^https:\/\/([a-z0-9-]+\.)*(teams\.cloud\.microsoft|teams\.microsoft\.com|teams\.live\.com)$/;
- var lines={}, order=[], last=0, lastDiag='';
+ var lines={}, order=[], cur={}, gen=0, last=0, lastDiag='';
  function pad(n){return (n<10?'0':'')+n}
  function clock(t){var d=new Date(t);return pad(d.getHours())+':'+pad(d.getMinutes())+':'+pad(d.getSeconds())}
  function render(){
@@ -133,9 +133,13 @@ button{font:inherit;padding:6px 10px;border-radius:8px;border:1px solid var(--li
   $('meta').textContent='Tab: '+(m.title||'')+' | read mode: '+m.mode;
   var changed=false;
   (m.caps||[]).forEach(function(c){
-   var key=c.id;
-   if(!lines[key]){ lines[key]={author:c.author,text:c.text}; order.push(key); changed=true; }
-   else if(lines[key].text!==c.text){ lines[key].text=c.text; lines[key].author=c.author||lines[key].author; changed=true; }
+   var key=cur[c.id]||c.id, L=lines[key];
+   if(L && L.text!==c.text){
+    var a=L.text.toLowerCase(), b=c.text.toLowerCase(), k=Math.min(12,a.length,b.length);
+    if(L.author!==c.author || a.slice(0,k)!==b.slice(0,k)){ key=c.id+'#'+(++gen); cur[c.id]=key; L=null; }   // a reused row now holds a new caption
+   }
+   if(!L){ lines[key]={author:c.author,text:c.text}; order.push(key); cur[c.id]=key; changed=true; }
+   else if(L.text!==c.text){ L.text=c.text; changed=true; }
   });
   if(changed) render();
   if(m.people&&m.people.length) $('people').textContent=m.people.join(', ');

@@ -60,6 +60,11 @@ a.bm{display:inline-block;padding:7px 12px;border-radius:8px;background:var(--ch
  </div>
 </div>
 
+<div class="card" id="alertsCard">
+ <h2>Earlier alerts</h2>
+ <div id="alertList" class="muted">None yet. Each alert stays here after the next one arrives.</div>
+</div>
+
 <div class="card" id="callCard">
  <h2>Call sheet</h2>
  <select id="callSel"></select>
@@ -261,14 +266,19 @@ setInterval(function(){
 var lastNameAt=0, lastAlertAt=0;
 function mentionsMe(text){ var t=' '+norm(text)+' '; return myNames().some(function(n){ return n && t.indexOf(' '+n+' ')>-1; }); }
 function mentionsStory(text){ var hit=null; (text||'').replace(/(\d{3,6})/g,function(_,n){ if(!hit&&storyDigits[n]) hit='CMCM-'+n; return _; }); return hit; }
+var lastMeAt=0;
+var REQ=/\b(can you|could you|would you|will you|please|send (me|those|these|them|it|that)|share (it|that|this|with)|make sure|need you to|need to (send|share|confirm)|you (need|should|can|have to|just need)|follow up|let me know|get back to|get a confirmation|confirm)\b/i;
+function smallCall(){ var seen={}, n=0; lines.slice(-40).forEach(function(L){ if(L.author&&!seen[L.author]){ seen[L.author]=1; n++; } }); return n<=3; }
 function checkLine(L){
- if(isMe(L.author)) return;
+ if(isMe(L.author)){ lastMeAt=Date.now(); return; }
  var why=null;
  if(mentionsMe(L.text)){ why='your name'; lastNameAt=Date.now(); }
  else { var s=mentionsStory(L.text); if(s) why=s; }
  if(!why && /\?\s*$/.test(L.text) && Date.now()-lastNameAt<30000) why='a question after your name';
+ if(!why && REQ.test(L.text) && L.text.length>25 && (smallCall() || Date.now()-lastMeAt<180000)) why='a request';
  if(!why) return;
- if(Date.now()-lastAlertAt<15000) return;
+ var wait=15000-(Date.now()-lastAlertAt);
+ if(wait>0){ setTimeout(function(){ lastAlertAt=Date.now(); gateThenAnswer(L,why); }, wait+200); lastAlertAt=Date.now()+wait; return; }
  lastAlertAt=Date.now();
  gateThenAnswer(L,why);
 }
@@ -309,20 +319,33 @@ function parseJSON(t){ var m=(t||'').match(/\{[\s\S]*\}/); if(!m) return null; t
 function showAsk(who,say,more,hot){ $('askWho').textContent=who; $('askSay').textContent=say||''; $('askMore').textContent=more||''; $('ask').classList.toggle('hot',!!hot); }
 function gateThenAnswer(L,why){
  showAsk('Heard '+why+' from '+(L.author||'someone')+' at '+clock(L.t)+': "'+L.text+'". Checking...','','',true);
- var q='Recent captions (newest last):\n'+transcript(25)+'\n\nThe line that triggered this: '+(L.author||'?')+': '+L.text+'\n\nIs Harsh being asked something, or about to be assigned or assumed to own something, right now? Reply with JSON only: {"for_me": true|false, "ask": "<what is being asked of him, in a few words, or empty>"}';
+ var q='Recent captions (newest last):\n'+transcript(25)+'\n\nThe line that triggered this: '+(L.author||'?')+': '+L.text+'\n\nIs Harsh being asked a question, or asked or expected to do something (send, share, confirm, follow up, check), or about to be assigned or assumed to own something, right now? A request aimed at the whole group including him counts. Reply with JSON only: {"for_me": true|false, "kind": "question"|"action", "ask": "<what is being asked of him, in a few words, or empty>"}';
  claude(S.mFast,q,400).then(function(t){
   var g=parseJSON(t);
   if(!g||!g.for_me){ showAsk('Heard '+why+' from '+(L.author||'someone')+' at '+clock(L.t)+'. Not a question for you.','','"'+L.text+'"',false); return; }
-  answer(g.ask||L.text, L.author);
+  answer(g.ask||L.text, L.author, g.kind);
  }).catch(function(e){ showAsk('Heard '+why+' at '+clock(L.t)+', but the AI check failed.','','"'+L.text+'"',true); banner('AI: '+e.message); });
 }
-function answer(ask,from){
+var alertLog=[];
+function logAlert(a){ alertLog.push(a); renderAlerts(); }
+function renderAlerts(){
+ var box=$('alertList'); box.textContent='';
+ if(!alertLog.length){ box.textContent='None yet. Each alert stays here after the next one arrives.'; return; }
+ alertLog.slice().reverse().forEach(function(a){
+  var d=el('div','res'); var h=el('div'); h.appendChild(el('b',null,clock(a.t)+'  '+(a.from?a.from+': ':'')+a.ask)); d.appendChild(h);
+  if(a.say) d.appendChild(el('div',null,'Say: '+a.say));
+  if(a.capture) d.appendChild(el('div','muted','To do: '+a.capture));
+  box.appendChild(d);
+ });
+}
+function answer(ask,from,kind){
  showAsk((from?from+' asked: ':'Asked: ')+ask,'Thinking...','',true);
- var q='Recent captions (newest last):\n'+transcript(40)+'\n\nWhat Harsh is being asked: '+ask+'\n\nGive him what to say now. Rules for the reply: say = what he says out loud now, at most 2 short sentences and 35 words, answering only what was asked, nothing about his own to-dos or internal follow-ups unless asked. source = item ids and dates only, e.g. "g24 23 Oct; call" (no commentary). if_pushed = one sentence. Reply with JSON only: {"say": "...", "source": "...", "if_pushed": "..."}';
+ var q='Recent captions (newest last):\n'+transcript(40)+'\n\nWhat Harsh is being asked: '+ask+'\n\nGive him what to say now. Rules for the reply: say = what he says out loud now, at most 2 short sentences and 35 words, answering only what was asked'+(kind==='action'?'. This is a request or task for him: say = a short, polite acknowledgement he can say now (agree to look at it or send it, never promise a date he has not been given), and capture = the to-do in under 12 words':', nothing about his own to-dos or internal follow-ups unless asked')+'. source = item ids and dates only, e.g. "g24 23 Oct; call" (no commentary). if_pushed = one sentence. Reply with JSON only: {"say": "...", "capture": "...", "source": "...", "if_pushed": "..."}';
  var t0=Date.now();
  claude(S.mSmart,q,1000).then(function(t){
   var a=parseJSON(t); if(!a||!a.say) a={say:t};
-  showAsk((from?from+' asked: ':'Asked: ')+ask,a.say||'',(a.source?'Source: '+a.source:'')+(a.if_pushed?'\nIf pushed: '+a.if_pushed:'')+'\n('+Math.round((Date.now()-t0)/1000)+' s)',true);
+  showAsk((from?from+(kind==='action'?' asked you to: ':' asked: '):'Asked: ')+ask,a.say||'',(a.capture?'To do: '+a.capture+'\n':'')+(a.source?'Source: '+a.source:'')+(a.if_pushed?'\nIf pushed: '+a.if_pushed:'')+'\n('+Math.round((Date.now()-t0)/1000)+' s)',true);
+  logAlert({t:Date.now(),from:from||'',ask:ask,kind:kind||'question',say:a.say||'',capture:a.capture||''});
  }).catch(function(e){ showAsk('Asked: '+ask,'','The AI answer failed: '+e.message,true); banner('AI: '+e.message); });
 }
 $('askedBtn').onclick=function(){ if(!lines.length){ banner('No captions yet. Click the bookmark on the Teams tab.'); return; } answer('the latest question in the captions, addressed to Harsh',null); };
@@ -430,7 +453,7 @@ $('saveWrap').onclick=function(){
  function go(){ driveSave('wrap-'+stamp+'.txt',wrapText).then(function(){ return driveSave('transcript-'+stamp+'.txt',full); }).then(function(){ $('saveWrap').textContent='Saved'; }).catch(function(e){ banner('Not saved: '+e.message); }); }
  if(driveLive()) go(); else connectDrive(go);
 };
-$('newCall').onclick=function(){ if(lines.length && !confirm('Clear this call\'s captions and people?')) return; lines=[]; byKey={}; cur={}; heardPeople={}; chosen={}; wrapText=''; renderTx(); renderCard(); $('wrapOut').textContent='New call. Tap Wrap at the end.'; $('copyWrap').disabled=true; $('saveWrap').disabled=true; $('saveWrap').textContent='Save to Drive'; showAsk('Nothing yet.','','',false); };
+$('newCall').onclick=function(){ if(lines.length && !confirm('Clear this call\'s captions and people?')) return; lines=[]; byKey={}; cur={}; heardPeople={}; chosen={}; alertLog=[]; renderAlerts(); wrapText=''; renderTx(); renderCard(); $('wrapOut').textContent='New call. Tap Wrap at the end.'; $('copyWrap').disabled=true; $('saveWrap').disabled=true; $('saveWrap').textContent='Save to Drive'; showAsk('Nothing yet.','','',false); };
 })();
 </script>
 </body>

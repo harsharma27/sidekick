@@ -68,6 +68,7 @@ a.bm{display:inline-block;padding:7px 12px;border-radius:8px;background:var(--ch
 <div class="card" id="callCard">
  <h2>Call sheet</h2>
  <select id="callSel"></select>
+ <div id="callNudge" style="display:none;margin:6px 0;padding:6px 8px;border-radius:6px;border:1px solid #c90;font-weight:600"></div>
  <div id="callBody" class="muted">No call sheets in the pack yet. Ask Claude to prep the day.</div>
 </div>
 
@@ -230,7 +231,7 @@ function driveSave(name,text){
 // ---------- captions ----------
 var OK=/^https:\/\/([a-z0-9-]+\.)*(teams\.cloud\.microsoft|teams\.microsoft\.com|teams\.live\.com)$/;
 var lines=[], byKey={}, cur={}, gen=0, lastMsg=0, heardPeople={};
-function myNames(){ return S.names.split(',').map(function(x){return norm(x)}).filter(Boolean); }
+function myNames(){ var a=S.names.split(',').concat((PACK&&PACK.me&&PACK.me.aliases)||[]); var seen={}; return a.map(function(x){return norm(x)}).filter(function(x){ if(!x||seen[x]) return false; seen[x]=1; return true; }); }
 function isMe(author){ var a=norm(author); return a==='sharma harsh'||a==='harsh sharma'||(PACK&&PACK.me&&a===norm(PACK.me.teams_name)); }
 window.addEventListener('message',function(ev){
  if(!OK.test(ev.origin)) return;
@@ -270,6 +271,7 @@ var lastMeAt=0;
 var REQ=/\b(can you|could you|would you|will you|please|send (me|those|these|them|it|that)|share (it|that|this|with)|make sure|need you to|need to (send|share|confirm)|you (need|should|can|have to|just need)|follow up|let me know|get back to|get a confirmation|confirm)\b/i;
 function smallCall(){ var seen={}, n=0; lines.slice(-40).forEach(function(L){ if(L.author&&!seen[L.author]){ seen[L.author]=1; n++; } }); return n<=3; }
 function checkLine(L){
+ try{ callNudge(L); }catch(e){}
  if(isMe(L.author)){ lastMeAt=Date.now(); return; }
  var why=null;
  if(mentionsMe(L.text)){ why='your name'; lastNameAt=Date.now(); }
@@ -358,19 +360,43 @@ function pickAutoCall(){
  cs.forEach(function(c){ if(!best && c.start && c.end && now>=Date.parse(c.start)-15*60000 && now<=Date.parse(c.end)) best=c.id; });
  return best||(cs[0]&&cs[0].id)||'';
 }
+var callDone={};
+var STOP={the:1,and:1,that:1,this:1,with:1,for:1,from:1,have:1,has:1,are:1,was:1,were:1,will:1,would:1,could:1,should:1,about:1,there:1,their:1,what:1,when:1,which:1,your:1,you:1,they:1,them:1,then:1,than:1,been:1,into:1,over:1,just:1,like:1,some:1,more:1,going:1,need:1,want:1,know:1,think:1,thing:1,things:1,does:1,did:1,not:1,but:1,can:1,all:1,any:1,out:1,who:1,how:1,why:1,here:1,were:1,still:1};
+function sigWords(t){ var seen={}, out=[]; norm(t).split(' ').forEach(function(w){ if(w.length>3 && !STOP[w] && !seen[w]){ seen[w]=1; out.push(w); } }); return out; }
+function overlap(item,text){ var ws=sigWords(item), tw=' '+norm(text)+' ', n=0; ws.forEach(function(w){ if(tw.indexOf(' '+w+' ')>-1 || tw.indexOf(' '+w)>-1) n++; }); return n; }
+function curCall(){ var cs=(PACK&&PACK.calls)||[]; return cs.filter(function(x){return x.id===callId})[0]||null; }
 function renderCall(){
  var sel=$('callSel'), body=$('callBody'), cs=(PACK&&PACK.calls)||[];
  sel.textContent='';
  if(!cs.length){ body.textContent='No call sheets in the pack yet. Ask Claude to prep the day.'; body.className='muted'; return; }
  if(!callId||!cs.some(function(c){return c.id===callId})) callId=pickAutoCall();
  cs.forEach(function(c){ var o=el('option',null,c.title+(c.time?' ('+c.time+')':'')); o.value=c.id; if(c.id===callId) o.selected=true; sel.appendChild(o); });
- var c=cs.filter(function(x){return x.id===callId})[0]; body.textContent=''; body.className='';
- [['Say',c.say],['Ask',c.ask],['Leave out',c.leave]].forEach(function(g){
-  if(!g[1]||!g[1].length) return;
+ var c=curCall(); body.textContent=''; body.className='';
+ [['Say','say'],['Ask','ask'],['Leave out','leave']].forEach(function(g){
+  var arr=c[g[1]]; if(!arr||!arr.length) return;
   var h=el('div',null); h.style.marginTop='6px'; h.appendChild(el('b',null,g[0])); body.appendChild(h);
-  g[1].forEach(function(t){ body.appendChild(el('div',null,'- '+t)); });
+  arr.forEach(function(t,i){
+   var key=c.id+':'+g[1]+':'+i, done=!!callDone[key];
+   var row=el('div',null,(g[1]==='leave'?'- ':(done?'[x] ':'[ ] '))+t);
+   if(done) row.style.textDecoration='line-through', row.style.opacity='0.55';
+   if(g[1]!=='leave'){ row.style.cursor='pointer'; row.onclick=function(){ callDone[key]=!callDone[key]; renderCall(); }; }
+   body.appendChild(row);
+  });
  });
  if(c.note) body.appendChild(el('div','muted',c.note));
+}
+var nudgeAt=0;
+function callNudge(L){
+ var c=curCall(); if(!c||!L||!L.text) return;
+ var changed=false, nud=null;
+ ['say','ask'].forEach(function(g){ (c[g]||[]).forEach(function(t,i){
+  var key=c.id+':'+g+':'+i; if(callDone[key]) return;
+  var ov=overlap(t,L.text);
+  if(isMe(L.author)){ if(ov>=3){ callDone[key]=1; changed=true; } }
+  else if(g==='ask' && ov>=2 && !nud){ nud=t; }
+ }); });
+ if(changed) renderCall();
+ if(nud && Date.now()-nudgeAt>20000){ nudgeAt=Date.now(); var n=$('callNudge'); n.style.display='block'; n.textContent='Good moment to raise: '+nud; setTimeout(function(){ if(Date.now()-nudgeAt>=19000) n.style.display='none'; },20000); }
 }
 $('callSel').onchange=function(){ callId=this.value; renderCall(); };
 function callSheetText(){ var cs=(PACK&&PACK.calls)||[]; var c=cs.filter(function(x){return x.id===callId})[0]; return c?('\nCURRENT CALL SHEET (Harsh\'s prepared points for this meeting; prefer these when relevant): '+JSON.stringify(c)):''; }

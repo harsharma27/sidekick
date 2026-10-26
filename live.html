@@ -60,6 +60,12 @@ a.bm{display:inline-block;padding:7px 12px;border-radius:8px;background:var(--ch
  </div>
 </div>
 
+<div class="card" id="callCard">
+ <h2>Call sheet</h2>
+ <select id="callSel"></select>
+ <div id="callBody" class="muted">No call sheets in the pack yet. Ask Claude to prep the day.</div>
+</div>
+
 <div class="card">
  <h2>Look up</h2>
  <input type="text" id="q" placeholder="Story number, person or topic, e.g. 45532, Bharat, KT" autocomplete="off">
@@ -168,7 +174,7 @@ function setPack(p,where){
  PACK=p; packAt=Date.now();
  $('packPill').textContent='Pack: '+p.items.length+' items, built '+(p.built||'?')+' ('+where+')'; $('packPill').className='pill ok';
  try{ localStorage.setItem(KEY+'_pack',JSON.stringify(p)); }catch(e){}
- storyDigits=collectDigits(); renderCard(); runLookup();
+ storyDigits=collectDigits(); renderCard(); runLookup(); renderCall();
 }
 try{ var cached=JSON.parse(localStorage.getItem(KEY+'_pack')||'null'); if(cached){ PACK=cached; $('packPill').textContent='Pack: '+cached.items.length+' items, built '+(cached.built||'?')+' (saved copy)'; $('packPill').className='pill warn'; } }catch(e){}
 $('packFile').onchange=function(){ var f=this.files[0]; if(!f) return; f.text().then(function(t){ try{ setPack(JSON.parse(t),'file'); }catch(e){ banner('Could not read that file as JSON.'); } }); };
@@ -194,12 +200,19 @@ function connectDrive(then){
  });
 }
 function gfetch(url,opts){ opts=opts||{}; opts.headers=Object.assign({Authorization:'Bearer '+gToken},opts.headers||{}); return fetch(url,opts).then(function(r){ if(!r.ok) throw new Error('Drive HTTP '+r.status); return r; }); }
+function loadCallsFromDrive(){
+ var q=encodeURIComponent("'"+S.gfolder+"' in parents and name contains 'sidekick-calls' and trashed=false&orderBy=createdTime desc".split('&')[0]);
+ return gfetch('https://www.googleapis.com/drive/v3/files?q='+q+'&orderBy=createdTime%20desc&fields=files(id,name)')
+  .then(function(r){return r.json()}).then(function(j){ var f=j.files&&j.files[0]; if(!f) return null; return gfetch('https://www.googleapis.com/drive/v3/files/'+f.id+'?alt=media').then(function(r){return r.json()}); })
+  .then(function(c){ if(c&&c.calls&&PACK){ PACK.calls=c.calls; PACK.callsBuilt=c.built||''; try{ localStorage.setItem(KEY+'_pack',JSON.stringify(PACK)); }catch(e){} callId=''; renderCall(); $('setStatus').textContent='Pack and '+c.calls.length+' call sheets loaded.'; } })
+  .catch(function(e){ banner('Call sheets not loaded: '+e.message); });
+}
 function loadPackFromDrive(){
  if(!S.gfolder){ banner('Add the Drive folder ID in settings.'); return; }
  var q=encodeURIComponent("'"+S.gfolder+"' in parents and name contains 'sidekick-pack' and trashed=false");
  gfetch('https://www.googleapis.com/drive/v3/files?q='+q+'&orderBy=createdTime%20desc&pageSize=1&fields=files(id,name,createdTime)')
   .then(function(r){return r.json()}).then(function(j){ var f=j.files&&j.files[0]; if(!f) throw new Error('no sidekick-pack file in the folder'); return gfetch('https://www.googleapis.com/drive/v3/files/'+f.id+'?alt=media'); })
-  .then(function(r){return r.json()}).then(function(p){ setPack(p,'Drive'); $('setStatus').textContent='Pack loaded from Drive.'; })
+  .then(function(r){return r.json()}).then(function(p){ setPack(p,'Drive'); $('setStatus').textContent='Pack loaded from Drive.'; return loadCallsFromDrive(); })
   .catch(function(e){ banner('Pack not loaded: '+e.message); });
 }
 $('driveBtn').onclick=function(){ connectDrive(loadPackFromDrive); };
@@ -276,6 +289,7 @@ function claude(model,userText,maxTok){
  if(usage.calls>=S.cap) return Promise.reject(new Error('Daily AI cap reached ('+S.cap+'). Raise it in settings if needed.'));
  var system=[{type:'text',text:RULES}];
  if(PACK) system.push({type:'text',text:'CONTEXT PACK (built '+(PACK.built||'?')+'):\n'+JSON.stringify(PACK),cache_control:{type:'ephemeral'}});
+ var cst=callSheetText(); if(cst) system.push({type:'text',text:cst});
  usage.calls++; renderUsage();
  var ctl=new AbortController(), timer=setTimeout(function(){ ctl.abort(); },60000);
  return fetch('https://api.anthropic.com/v1/messages',{method:'POST',signal:ctl.signal,headers:{'content-type':'application/json','x-api-key':S.apikey,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},
@@ -313,6 +327,30 @@ function answer(ask,from){
 }
 $('askedBtn').onclick=function(){ if(!lines.length){ banner('No captions yet. Click the bookmark on the Teams tab.'); return; } answer('the latest question in the captions, addressed to Harsh',null); };
 $('dismissBtn').onclick=function(){ showAsk('Nothing new.','','',false); };
+
+// ---------- call sheet ----------
+var callId='';
+function pickAutoCall(){
+ var cs=(PACK&&PACK.calls)||[]; var now=Date.now(), best='';
+ cs.forEach(function(c){ if(!best && c.start && c.end && now>=Date.parse(c.start)-15*60000 && now<=Date.parse(c.end)) best=c.id; });
+ return best||(cs[0]&&cs[0].id)||'';
+}
+function renderCall(){
+ var sel=$('callSel'), body=$('callBody'), cs=(PACK&&PACK.calls)||[];
+ sel.textContent='';
+ if(!cs.length){ body.textContent='No call sheets in the pack yet. Ask Claude to prep the day.'; body.className='muted'; return; }
+ if(!callId||!cs.some(function(c){return c.id===callId})) callId=pickAutoCall();
+ cs.forEach(function(c){ var o=el('option',null,c.title+(c.time?' ('+c.time+')':'')); o.value=c.id; if(c.id===callId) o.selected=true; sel.appendChild(o); });
+ var c=cs.filter(function(x){return x.id===callId})[0]; body.textContent=''; body.className='';
+ [['Say',c.say],['Ask',c.ask],['Leave out',c.leave]].forEach(function(g){
+  if(!g[1]||!g[1].length) return;
+  var h=el('div',null); h.style.marginTop='6px'; h.appendChild(el('b',null,g[0])); body.appendChild(h);
+  g[1].forEach(function(t){ body.appendChild(el('div',null,'- '+t)); });
+ });
+ if(c.note) body.appendChild(el('div','muted',c.note));
+}
+$('callSel').onchange=function(){ callId=this.value; renderCall(); };
+function callSheetText(){ var cs=(PACK&&PACK.calls)||[]; var c=cs.filter(function(x){return x.id===callId})[0]; return c?('\nCURRENT CALL SHEET (Harsh\'s prepared points for this meeting; prefer these when relevant): '+JSON.stringify(c)):''; }
 
 // ---------- look up (no AI) ----------
 function itemText(i){ return [i.id,i.key,i.title,i.court,i.owner,i.group,(i.log||[]).map(function(l){return l.t}).join(' ')].join(' '); }
@@ -368,7 +406,7 @@ function renderCard(){
   its.forEach(function(i){ box.appendChild(itemBox(i)); });
  });
 }
-renderCard();
+renderCard(); renderCall();
 $('briefBtn').onclick=function(){
  var picked=PACK?(PACK.people||[]).filter(function(p){return chosen[p.name]}).map(function(p){return p.name}):[];
  $('brief').textContent='Thinking...';

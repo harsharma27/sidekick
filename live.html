@@ -23,6 +23,8 @@ input[type=text],input[type=password],input[type=number]{width:100%;font:inherit
 button{font:inherit;padding:7px 12px;border-radius:8px;border:1px solid var(--line);background:var(--chip);color:var(--fg);cursor:pointer}
 button.primary{background:var(--accent);color:#fff;border-color:var(--accent)}
 button:disabled{opacity:.5;cursor:default}
+.packbtn{font-size:12px;padding:3px 10px;border-radius:999px}
+.packbtn.need{border-color:var(--warn);color:var(--warn);font-weight:600}
 .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
 .res{border-top:1px solid var(--line);padding:8px 0}
 .res:first-child{border-top:0}
@@ -45,6 +47,7 @@ a.bm{display:inline-block;padding:7px 12px;border-radius:8px;background:var(--ch
  <h1>Sidekick Live</h1>
  <span class="pill" id="capPill">Captions: waiting</span>
  <span class="pill" id="packPill">Pack: not loaded</span>
+ <button id="packBtn" class="packbtn" title="Reload the context pack and call sheets from Drive">Load pack from Drive</button>
  <span class="pill" id="aiPill">AI: 0 calls today</span>
 </header>
 <div id="banner"></div>
@@ -178,11 +181,13 @@ var PACK=null, packAt=0;
 function setPack(p,where){
  if(!p||!p.items){ banner('That file is not a Sidekick pack.'); return; }
  PACK=p; packAt=Date.now();
+ $('packBtn').classList.remove('need');
  $('packPill').textContent='Pack: '+p.items.length+' items, built '+(p.built||'?')+' ('+where+')'; $('packPill').className='pill ok';
  try{ localStorage.setItem(KEY+'_pack',JSON.stringify(p)); }catch(e){}
  storyDigits=collectDigits(); renderCard(); runLookup(); renderCall();
 }
-try{ var cached=JSON.parse(localStorage.getItem(KEY+'_pack')||'null'); if(cached){ PACK=cached; $('packPill').textContent='Pack: '+cached.items.length+' items, built '+(cached.built||'?')+' (saved copy)'; $('packPill').className='pill warn'; } }catch(e){}
+try{ var cached=JSON.parse(localStorage.getItem(KEY+'_pack')||'null'); if(cached){ PACK=cached; $('packPill').textContent='Pack: '+cached.items.length+' items, built '+(cached.built||'?')+' (saved copy)'; $('packPill').className='pill warn'; $('packBtn').classList.add('need'); } }catch(e){}
+if(!PACK) $('packBtn').classList.add('need');
 $('packFile').onchange=function(){ var f=this.files[0]; if(!f) return; f.text().then(function(t){ try{ setPack(JSON.parse(t),'file'); }catch(e){ banner('Could not read that file as JSON.'); } }); };
 var storyDigits=collectDigits();
 function collectDigits(){
@@ -222,6 +227,7 @@ function loadPackFromDrive(){
   .catch(function(e){ banner('Pack not loaded: '+e.message); });
 }
 $('driveBtn').onclick=function(){ connectDrive(loadPackFromDrive); };
+$('packBtn').onclick=function(){ connectDrive(loadPackFromDrive); };
 function driveSave(name,text){
  var b='skb'+Date.now(), meta={name:name,parents:[S.gfolder],mimeType:'text/plain'};
  var body='--'+b+'\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n'+JSON.stringify(meta)+'\r\n--'+b+'\r\nContent-Type: text/plain; charset=UTF-8\r\n\r\n'+text+'\r\n--'+b+'--';

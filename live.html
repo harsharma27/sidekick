@@ -60,6 +60,13 @@ a.bm{display:inline-block;padding:7px 12px;border-radius:8px;background:var(--ch
 </header>
 <div id="banner"></div>
 
+<div class="card" id="callCard">
+ <h2>Call sheet</h2>
+ <select id="callSel"></select>
+ <div id="callNudge" style="display:none;margin:6px 0;padding:6px 8px;border-radius:6px;border:1px solid #c90;font-weight:600"></div>
+ <div id="callBody" class="muted">No call sheets in the pack yet. Ask Claude to prep the day.</div>
+</div>
+
 <div class="card" id="ask">
  <h2>Asked of you</h2>
  <div id="askWho" class="muted">Nothing yet. Alerts appear when your name or one of your stories comes up.</div>
@@ -76,13 +83,6 @@ a.bm{display:inline-block;padding:7px 12px;border-radius:8px;background:var(--ch
  <div id="alertList" class="muted">None yet. Each alert stays here after the next one arrives.</div>
 </div>
 
-<div class="card" id="callCard">
- <h2>Call sheet</h2>
- <select id="callSel"></select>
- <div id="callNudge" style="display:none;margin:6px 0;padding:6px 8px;border-radius:6px;border:1px solid #c90;font-weight:600"></div>
- <div id="callBody" class="muted">No call sheets in the pack yet. Ask Claude to prep the day.</div>
-</div>
-
 <div class="card">
  <h2>Look up</h2>
  <input type="text" id="q" placeholder="Story number, person or topic, e.g. 45532, Bharat, KT" autocomplete="off">
@@ -90,8 +90,8 @@ a.bm{display:inline-block;padding:7px 12px;border-radius:8px;background:var(--ch
 </div>
 
 <div class="card">
- <h2>This call</h2>
- <div class="muted">People heard in captions are added automatically. Tap to add or remove.</div>
+ <h2>Who is on the call</h2>
+ <div class="muted">People heard in captions are added automatically. Tap to add or remove. Background is closed by default.</div>
  <div class="chips" id="people"></div>
  <div id="cardList"></div>
  <div class="row" style="margin-top:8px"><button id="briefBtn">Brief me (AI)</button></div>
@@ -454,7 +454,7 @@ function matchPerson(author){
 }
 function personItems(p){
  var names=[p.name].concat(p.aliases||[]).map(norm);
- return PACK.items.filter(function(i){ if(!(i.status==='open'||i.status==='waiting')) return false; var t=norm(itemText(i)); return names.some(function(n){ return n.length>2 && t.indexOf(n)>-1; }); }).slice(0,5);
+ return PACK.items.filter(function(i){ if(!(i.status==='open'||i.status==='waiting')) return false; var t=norm(i.court||''); return names.some(function(n){ return n.length>2 && t.indexOf(n)>-1; }); }).slice(0,5);
 }
 function renderCard(){
  var chips=$('people'); chips.textContent='';
@@ -465,8 +465,10 @@ function renderCard(){
  if(!picked.length){ box.appendChild(el('div','muted','Pick who is on the call, or wait for captions to fill it in.')); return; }
  picked.forEach(function(p){
   var h=el('div',null); h.style.marginTop='8px'; h.appendChild(el('b',null,p.name)); h.appendChild(el('span','muted',' '+(p.role||''))); box.appendChild(h);
-  var its=personItems(p); if(!its.length) box.appendChild(el('div','muted','No open items mention them.'));
-  its.forEach(function(i){ box.appendChild(itemBox(i)); });
+  var its=personItems(p);
+  if(!its.length){ box.appendChild(el('div','muted','Nothing waiting on them.')); return; }
+  var det=document.createElement('details'); var sm=document.createElement('summary'); sm.textContent='Background: '+its.length+' item'+(its.length>1?'s':'')+' waiting on '+p.name.split(' ')[0]; det.appendChild(sm);
+  its.forEach(function(i){ det.appendChild(itemBox(i)); }); box.appendChild(det);
  });
 }
 renderCard(); renderCall();

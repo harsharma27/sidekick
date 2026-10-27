@@ -17,7 +17,8 @@ header{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10p
 .card{border:1px solid var(--line);background:var(--card);border-radius:12px;padding:12px;margin-bottom:12px}
 .card h2{font-size:13px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);margin:0 0 8px}
 #ask.hot{background:var(--hot)}
-#askSay{font-size:19px;font-weight:600;margin:4px 0}
+#askSay{font-size:19px;font-weight:600;margin:4px 0;white-space:pre-wrap}
+#askMore{white-space:pre-wrap}
 .muted{color:var(--muted);font-size:13px}
 input[type=text],input[type=password],input[type=number]{width:100%;font:inherit;padding:8px 10px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--fg)}
 button{font:inherit;padding:7px 12px;border-radius:8px;border:1px solid var(--line);background:var(--chip);color:var(--fg);cursor:pointer}
@@ -67,7 +68,12 @@ a.bm{display:inline-block;padding:7px 12px;border-radius:8px;background:var(--ch
  <div id="askMore" class="muted"></div>
  <div class="row" style="margin-top:8px">
   <button id="askedBtn" class="primary">I've been asked</button>
+  <button id="suggestBtn">Suggest a point</button>
   <button id="dismissBtn">Dismiss</button>
+ </div>
+ <div class="row" style="margin-top:8px">
+  <input type="text" id="sayIn" placeholder="Want to raise something? Type a few words, e.g. update on 45647" autocomplete="off" style="flex:1">
+  <button id="sayBtn">What should I say?</button>
  </div>
 </div>
 
@@ -133,8 +139,8 @@ a.bm{display:inline-block;padding:7px 12px;border-radius:8px;background:var(--ch
 
 <script type="text/plain" id="bmsrc">
 (function(){
- var SK='https://harsharma27.github.io/sidekick/live.html', ORIGIN='https://harsharma27.github.io', V=10;
- if(window.__skcap){ try{ if(window.__skcap.v===V&&window.__skcap.w&&!window.__skcap.w.closed){ window.__skcap.w.focus(); return; } }catch(e){} clearInterval(window.__skcap.t); window.__skcap=null; }
+ var SK='https://harsharma27.github.io/sidekick/live.html', ORIGIN='https://harsharma27.github.io', V=11;
+ if(window.__skcap){ try{ if(window.__skcap.v===V&&window.__skcap.w&&!window.__skcap.w.closed){ window.__skcap.w.focus(); return; } }catch(e){} clearInterval(window.__skcap.t); try{ window.__skcap.wk.terminate(); }catch(e){} try{ window.__skcap.mo.disconnect(); }catch(e){} window.__skcap=null; }
  var w=window.open(SK,'sidekick_live');
  if(!w){ alert('Sidekick: allow pop-ups for this site, then click the bookmark again.'); return; }
  var seq=0, st={w:w,t:0,v:V}; window.__skcap=st;
@@ -153,11 +159,17 @@ a.bm{display:inline-block;padding:7px 12px;border-radius:8px;background:var(--ch
   });
   return out;
  }
- st.t=setInterval(function(){
-  if(w.closed){ clearInterval(st.t); window.__skcap=null; return; }
+ var lastSend=0;
+ function send(){
+  if(w.closed){ stop(); return; }
+  lastSend=Date.now();
   var wr=wrapper(), caps=wr?items(wr):[];
   try{ w.postMessage({sk:'cap1',v:V,title:document.title,at:Date.now(),mode:wr?'structured':'none',caps:caps.slice(-12)},ORIGIN); }catch(e){}
- },1000);
+ }
+ function stop(){ try{ st.wk.terminate(); }catch(e){} try{ st.mo.disconnect(); }catch(e){} clearInterval(st.t); window.__skcap=null; }
+ try{ st.mo=new MutationObserver(function(){ if(Date.now()-lastSend>300) send(); }); st.mo.observe(document.body,{subtree:true,childList:true,characterData:true}); }catch(e){}
+ try{ st.wk=new Worker(URL.createObjectURL(new Blob(['setInterval(function(){postMessage(1)},500)'],{type:'text/javascript'}))); st.wk.onmessage=send; }catch(e){ st.t=setInterval(send,1000); }
+ send();
 })();
 </script>
 
@@ -267,7 +279,7 @@ function renderTx(){
 function transcript(n){ return lines.slice(-(n||40)).map(function(L){ return '['+clock(L.t)+'] '+(L.author||'?')+': '+L.text; }).join('\n'); }
 
 // a line is settled when Teams stops changing it for 2.5 s
-setInterval(function(){
+function tick(){
  var age=lastMsg?Math.round((Date.now()-lastMsg)/1000):-1;
  var p=$('capPill');
  if(age<0){ p.textContent='Captions: waiting for the bookmark'; p.className='pill warn'; }
@@ -275,7 +287,10 @@ setInterval(function(){
  else { p.textContent='Captions: no update '+age+' s'; p.className='pill bad'; }
  var now=Date.now();
  lines.forEach(function(L){ if(!L.checked && now-L.changed>2500){ L.checked=true; checkLine(L); } });
-},1000);
+}
+// a Worker timer is not slowed down when this window is in the background
+var tickWorker=null;
+try{ tickWorker=new Worker(URL.createObjectURL(new Blob(['setInterval(function(){postMessage(1)},1000)'],{type:'text/javascript'}))); tickWorker.onmessage=tick; }catch(e){ setInterval(tick,1000); }
 
 // ---------- triggers ----------
 var lastNameAt=0, lastAlertAt=0;
@@ -365,6 +380,31 @@ function answer(ask,from,kind){
  }).catch(function(e){ showAsk('Asked: '+ask,'','The AI answer failed: '+e.message,true); banner('AI: '+e.message); });
 }
 $('askedBtn').onclick=function(){ if(!lines.length){ banner('No captions yet. Click the bookmark on the Teams tab.'); return; } answer('the latest question in the captions, addressed to Harsh',null); };
+function sayFor(topic){
+ if(!topic){ banner('Type a few words first, e.g. update on 45647.'); return; }
+ showAsk('You want to raise: '+topic,'Thinking...','',true);
+ var q='Recent captions (newest last):\n'+(lines.length?transcript(40):'(no captions yet)')+'\n\nHarsh wants to bring up this himself, nobody asked: '+topic+'\n\nGive him what to say now. say = what he says out loud, at most 2 short sentences and 35 words, plain and polite, only facts in the pack or the call. If the pack does not cover it, say so and give a safe line that asks rather than states. source = item ids and dates only. if_pushed = one sentence. Reply with JSON only: {"say": "...", "source": "...", "if_pushed": "..."}';
+ var t0=Date.now();
+ claude(S.mSmart,q,800).then(function(t){
+  var a=parseJSON(t); if(!a||!a.say) a={say:t};
+  showAsk('You want to raise: '+topic,a.say||'',(a.source?'Source: '+a.source:'')+(a.if_pushed?'\nIf pushed: '+a.if_pushed:'')+'\n('+Math.round((Date.now()-t0)/1000)+' s)',true);
+  logAlert({t:Date.now(),from:'',ask:'You raised: '+topic,kind:'own',say:a.say||'',capture:''});
+ }).catch(function(e){ showAsk('You want to raise: '+topic,'','The AI answer failed: '+e.message,true); banner('AI: '+e.message); });
+}
+function suggestPoint(){
+ showAsk('Looking for a point worth raising...','Thinking...','',true);
+ var q='Recent captions (newest last):\n'+(lines.length?transcript(40):'(no captions yet)')+'\n\nNobody asked Harsh anything. Using the pack (open items, whose court, call sheet), propose at most 2 points that are worth Harsh raising right now: an open item waiting on someone who is on this call, a call-sheet point that fits the moment, or a gap in what was just said that touches his stories. Skip anything already said or already ticked. For each: say = one or two short spoken sentences (max 35 words), why = under 12 words, source = item ids and dates only. If nothing fits, return an empty list. Reply with JSON only: {"points":[{"say":"...","why":"...","source":"..."}]}';
+ var t0=Date.now();
+ claude(S.mSmart,q,1000).then(function(t){
+  var a=parseJSON(t), pts=(a&&a.points)||[];
+  if(!pts.length){ showAsk('Nothing worth raising right now.','','('+Math.round((Date.now()-t0)/1000)+' s)',false); return; }
+  showAsk('Possible points to raise',pts.map(function(p,i){ return (i+1)+'. '+p.say; }).join('\n'),pts.map(function(p,i){ return (i+1)+'. '+(p.why||'')+(p.source?' ['+p.source+']':''); }).join('\n')+'\n('+Math.round((Date.now()-t0)/1000)+' s)',true);
+  logAlert({t:Date.now(),from:'',ask:'Suggested points',kind:'own',say:pts.map(function(p){return p.say}).join(' | '),capture:''});
+ }).catch(function(e){ showAsk('Suggest a point failed.','','The AI answer failed: '+e.message,true); banner('AI: '+e.message); });
+}
+$('sayBtn').onclick=function(){ sayFor($('sayIn').value.trim()); };
+$('sayIn').onkeydown=function(e){ if(e.key==='Enter'){ e.preventDefault(); sayFor($('sayIn').value.trim()); } };
+$('suggestBtn').onclick=suggestPoint;
 $('dismissBtn').onclick=function(){ showAsk('Nothing new.','','',false); };
 
 // ---------- call sheet ----------

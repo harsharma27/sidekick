@@ -132,6 +132,7 @@ a.bm{display:inline-block;padding:7px 12px;border-radius:8px;background:var(--ch
   </div>
   <div class="muted" id="setStatus" style="margin-top:6px"></div>
   <label>Last AI reply (for troubleshooting)</label><pre id="lastReply" class="muted">None yet.</pre>
+  <label>AI errors today (newest first)</label><pre id="errLog" class="muted">None.</pre>
  </details>
 </div>
 <p class="muted">Captions are read from your own Teams tab by the bookmark. Only when something is aimed at you, or you tap a button, are the recent caption lines sent with your context pack to Claude through your API key. Wraps are saved to your Drive folder only when you tap Save.</p>
@@ -324,27 +325,43 @@ function today(){ var d=new Date(); return d.getFullYear()+'-'+pad(d.getMonth()+
 function loadUsage(){ try{ var u=JSON.parse(localStorage.getItem(KEY+'_usage')||'null'); if(u&&u.day===today()) return u; }catch(e){} return {day:today(),calls:0,inTok:0,cacheTok:0,outTok:0}; }
 function renderUsage(){ $('aiPill').textContent='AI: '+usage.calls+' calls today ('+Math.round((usage.inTok+usage.cacheTok)/1000)+'k in, '+Math.round(usage.outTok/1000)+'k out)'; $('aiPill').className='pill'+(usage.calls>=S.cap?' bad':''); }
 renderUsage();
-function claude(model,userText,maxTok){
- if(!S.apikey) return Promise.reject(new Error('Add your Anthropic API key in settings.'));
- if(usage.day!==today()) usage=loadUsage();
- if(usage.calls>=S.cap) return Promise.reject(new Error('Daily AI cap reached ('+S.cap+'). Raise it in settings if needed.'));
+var errLog=[];
+function logErr(m){ errLog.push(clock(Date.now())+'  '+m); var el2=$('errLog'); if(el2) el2.textContent=errLog.slice().reverse().join('\n'); }
+function claudeOnce(model,userText,maxTok,tmo){
  var system=[{type:'text',text:RULES}];
  if(PACK) system.push({type:'text',text:'CONTEXT PACK (built '+(PACK.built||'?')+'):\n'+JSON.stringify(PACK),cache_control:{type:'ephemeral'}});
  var cst=callSheetText(); if(cst) system.push({type:'text',text:cst});
  usage.calls++; renderUsage();
- var ctl=new AbortController(), timer=setTimeout(function(){ ctl.abort(); },60000);
+ var ctl=new AbortController(), timer=setTimeout(function(){ ctl.abort(); },tmo);
  return fetch('https://api.anthropic.com/v1/messages',{method:'POST',signal:ctl.signal,headers:{'content-type':'application/json','x-api-key':S.apikey,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},
-  body:JSON.stringify({model:model,max_tokens:maxTok||400,system:system,messages:[{role:'user',content:userText}]})})
-  .then(function(r){ return r.json().then(function(j){ clearTimeout(timer); if(!r.ok) throw new Error((j.error&&j.error.message)||('API HTTP '+r.status)); return j; }); })
+  body:JSON.stringify({model:model,max_tokens:maxTok,system:system,messages:[{role:'user',content:userText}]})})
+  .then(function(r){ return r.json().then(function(j){ clearTimeout(timer); if(!r.ok){ var er=new Error((j.error&&j.error.message)||('API HTTP '+r.status)); er.retry=(r.status===429||r.status>=500||/overload/i.test(er.message)); throw er; } return j; },function(){ clearTimeout(timer); var er=new Error('API HTTP '+r.status+' (unreadable reply)'); er.retry=(r.status===429||r.status>=500); throw er; }); })
   .then(function(j){
    var u=j.usage||{}; usage.inTok+=(u.input_tokens||0)+(u.cache_creation_input_tokens||0); usage.cacheTok+=(u.cache_read_input_tokens||0); usage.outTok+=(u.output_tokens||0);
-   try{ localStorage.setItem(KEY+'_usage',JSON.stringify(usage)); }catch(e){} renderUsage(); banner('');
+   try{ localStorage.setItem(KEY+'_usage',JSON.stringify(usage)); }catch(e){} renderUsage();
    var text=(j.content||[]).filter(function(c){return c.type==='text'}).map(function(c){return c.text}).join('\n').trim();
    lastReply='model '+(j.model||model)+' | stop '+(j.stop_reason||'?')+' | blocks '+(j.content||[]).map(function(c){return c.type}).join(',')+' | out '+((j.usage||{}).output_tokens||0)+' tokens\n'+text;
    var lr=$('lastReply'); if(lr) lr.textContent=lastReply;
-   if(!text) throw new Error('The AI sent no text back (stop: '+(j.stop_reason||'?')+'). Details under Setup and settings, Last AI reply.');
+   if(!text){ var er=new Error('The AI sent no text back (stop: '+(j.stop_reason||'?')+').'); er.moreTokens=(j.stop_reason==='max_tokens'); throw er; }
    return text;
-  },function(e){ clearTimeout(timer); throw e.name==='AbortError'?new Error('The AI request timed out.'):e; });
+  },function(e){ clearTimeout(timer); if(e.name==='AbortError'){ var er=new Error('The AI request timed out.'); er.retry=true; throw er; } if(e instanceof TypeError){ e.retry=true; } throw e; });
+}
+// retries: more room when the reply ran out of tokens, and a short wait on rate limit, overload, network error or timeout
+function claude(model,userText,maxTok){
+ if(!S.apikey) return Promise.reject(new Error('Add your Anthropic API key in settings.'));
+ if(usage.day!==today()) usage=loadUsage();
+ if(usage.calls>=S.cap) return Promise.reject(new Error('Daily AI cap reached ('+S.cap+'). Raise it in settings if needed.'));
+ var tok=Math.max(maxTok||0,2000), tmo=tok>=4000?180000:90000, tries=0;
+ function attempt(){
+  tries++;
+  return claudeOnce(model,userText,tok,tmo).then(function(t){ banner(''); return t; },function(e){
+   logErr('try '+tries+': '+e.message);
+   if(tries<3 && e.moreTokens){ tok=Math.min(tok*3,16000); banner('AI reply was cut short, retrying with more room...'); return attempt(); }
+   if(tries<3 && e.retry){ var wait=tries===1?2000:6000; banner('AI busy ('+e.message+'), retrying in '+(wait/1000)+' s...'); return new Promise(function(res){ setTimeout(res,wait); }).then(attempt); }
+   throw e;
+  });
+ }
+ return attempt();
 }
 function parseJSON(t){ var m=(t||'').match(/\{[\s\S]*\}/); if(!m) return null; try{ return JSON.parse(m[0]); }catch(e){ return null; } }
 function showAsk(who,say,more,hot){ $('askWho').textContent=who; $('askSay').textContent=say||''; $('askMore').textContent=more||''; $('ask').classList.toggle('hot',!!hot); }

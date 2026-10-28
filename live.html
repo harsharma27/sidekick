@@ -187,6 +187,7 @@ function saveSettings(){ ['apikey','gcid','gfolder','names','mFast','mSmart'].fo
 $('saveBtn').onclick=function(){ saveSettings(); $('setStatus').textContent='Saved.'; };
 if(!S.apikey||!S.gcid) $('setup').open=true;
 
+function localBuilt(b){ if(!b) return '?'; var m=String(b).match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})(?::\d{2})?\s*(UTC|Z)?$/); if(!m) return b; var d=new Date(Date.UTC(+m[1],m[2]-1,+m[3],+m[4],+m[5])); return d.toLocaleString(undefined,{weekday:'short',day:'numeric',month:'short',hour:'numeric',minute:'2-digit'}); }
 // bookmarklet
 $('bm').href='javascript:'+encodeURIComponent($('bmsrc').textContent.trim());
 $('bm').onclick=function(e){ e.preventDefault(); alert('Drag this button to the bookmarks bar, then click it on the Teams tab.'); };
@@ -203,11 +204,11 @@ function setPack(p,where){
  if(!p||!p.items){ banner('That file is not a Sidekick pack.'); return; }
  PACK=p; packAt=Date.now();
  $('packBtn').classList.remove('need');
- $('packPill').textContent='Pack: '+p.items.length+' items, built '+(p.built||'?')+' ('+where+')'; $('packPill').className='pill ok';
+ $('packPill').textContent='Pack: '+p.items.length+' items, built '+localBuilt(p.built)+' ('+where+')'; $('packPill').className='pill ok';
  try{ localStorage.setItem(KEY+'_pack',JSON.stringify(p)); }catch(e){}
  storyDigits=collectDigits(); renderCard(); runLookup(); renderCall();
 }
-try{ var cached=JSON.parse(localStorage.getItem(KEY+'_pack')||'null'); if(cached){ PACK=cached; $('packPill').textContent='Pack: '+cached.items.length+' items, built '+(cached.built||'?')+' (saved copy)'; $('packPill').className='pill warn'; $('packBtn').classList.add('need'); } }catch(e){}
+try{ var cached=JSON.parse(localStorage.getItem(KEY+'_pack')||'null'); if(cached){ PACK=cached; $('packPill').textContent='Pack: '+cached.items.length+' items, built '+localBuilt(cached.built)+' (saved copy)'; $('packPill').className='pill warn'; $('packBtn').classList.add('need'); } }catch(e){}
 if(!PACK) $('packBtn').classList.add('need');
 $('packFile').onchange=function(){ var f=this.files[0]; if(!f) return; f.text().then(function(t){ try{ setPack(JSON.parse(t),'file'); }catch(e){ banner('Could not read that file as JSON.'); } }); };
 var storyDigits=collectDigits();

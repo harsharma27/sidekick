@@ -259,7 +259,8 @@ function driveSave(name,text){
 
 // ---------- captions ----------
 var OK=/^https:\/\/([a-z0-9-]+\.)*(teams\.cloud\.microsoft|teams\.microsoft\.com|teams\.live\.com)$/;
-var lines=[], byKey={}, cur={}, gen=0, lastMsg=0, heardPeople={};
+var lines=[], byKey={}, cur={}, gen=0, lastMsg=0, heardPeople={}, oldSig={};
+function sig(author,text){ return norm(author)+'|'+norm(text); }
 function myNames(){ var a=S.names.split(',').concat((PACK&&PACK.me&&PACK.me.aliases)||[]); var seen={}; return a.map(function(x){return norm(x)}).filter(function(x){ if(!x||seen[x]) return false; seen[x]=1; return true; }); }
 function isMe(author){ var a=norm(author); return a==='sharma harsh'||a==='harsh sharma'||(PACK&&PACK.me&&a===norm(PACK.me.teams_name)); }
 window.addEventListener('message',function(ev){
@@ -267,6 +268,7 @@ window.addEventListener('message',function(ev){
  var m=ev.data; if(!m||m.sk!=='cap1') return;
  lastMsg=Date.now();
  (m.caps||[]).forEach(function(c){
+  if(!cur[c.id] && oldSig[sig(c.author,c.text)]) return; // caption still on the Teams screen from before New call
   var key=cur[c.id]||c.id, L=byKey[key];
   if(L&&L.text!==c.text){ var a=norm(L.text), b=norm(c.text), k=Math.min(12,a.length,b.length); if(L.author!==c.author||a.slice(0,k)!==b.slice(0,k)){ key=c.id+'#'+(++gen); cur[c.id]=key; L=null; } }
   if(!L){ L={key:key,author:c.author,text:c.text,t:Date.now(),changed:Date.now(),checked:false}; byKey[key]=L; lines.push(L); cur[c.id]=key; notePerson(c.author); renderTx(); }
@@ -571,18 +573,23 @@ function doWrap(after){
  var full=lines.map(function(L){ return '['+clock(L.t)+'] '+(L.author||'?')+': '+L.text; }).join('\n');
  var q='Full caption transcript of the call (speaker names from Teams, words can be misheard):\n'+full.slice(-120000)+'\n\nWrite the wrap for Harsh only. Sections, each a short list, "None" when empty:\n1. Asked of Harsh (who asked, what, quote the caption)\n2. What Harsh said he would do (only his own lines, as said)\n3. Decisions that affect his work\n4. Follow-ups to send (to whom, one line each)\n5. Tracker updates to propose (tracker item id, the new log line)\nUse only what the captions say. Keep names, story numbers and dates as said; mark anything unclear (as heard).';
  wrapLines=lines.length;
- claude(S.mSmart,q,4000).then(function(t){ wrapText=t; $('wrapOut').textContent=t; $('copyWrap').disabled=false; $('saveWrap').disabled=false; if(after) after(); }).catch(function(e){ $('wrapOut').textContent='Wrap failed: '+e.message; });
+ claude(S.mSmart,q,4000).then(function(t){ wrapText=t; $('wrapOut').textContent=t; $('copyWrap').disabled=false; $('saveWrap').disabled=false; $('saveWrap').textContent='Save to Drive'; if(after) after(); }).catch(function(e){ $('wrapOut').textContent='Wrap failed: '+e.message; saving=false; $('saveWrap').disabled=!wrapText; $('saveWrap').textContent='Save to Drive'; });
 }
 $('wrapBtn').onclick=function(){ doWrap(); };
 $('copyWrap').onclick=function(){ if(navigator.clipboard) navigator.clipboard.writeText(wrapText).then(function(){ $('copyWrap').textContent='Copied'; setTimeout(function(){ $('copyWrap').textContent='Copy'; },2000); }); };
-$('saveWrap').onclick=function(){
- if(lines.length>wrapLines){ banner('New captions since the wrap ('+(lines.length-wrapLines)+' lines). Re-wrapping before saving...'); doWrap(function(){ banner(''); $('saveWrap').click(); }); return; }
+var saving=false, savedWrap=null;
+function saveNow(rewrapped){
+ if(saving) return;
+ if(savedWrap!==null && savedWrap===wrapText){ $('saveWrap').textContent='Saved'; return; }
+ if(!rewrapped && lines.length>wrapLines){ saving=true; $('saveWrap').disabled=true; $('saveWrap').textContent='Re-wrapping...'; banner('New captions since the wrap ('+(lines.length-wrapLines)+' lines). Re-wrapping once before saving...'); doWrap(function(){ banner(''); saving=false; saveNow(true); }); return; }
+ saving=true; $('saveWrap').disabled=true; $('saveWrap').textContent='Saving...';
  var d=new Date(), stamp=d.getFullYear()+pad(d.getMonth()+1)+pad(d.getDate())+'-'+pad(d.getHours())+pad(d.getMinutes());
- var full=lines.map(function(L){ return '['+clock(L.t)+'] '+(L.author||'?')+': '+L.text; }).join('\n');
- function go(){ driveSave('wrap-'+stamp+'.txt',wrapText).then(function(){ return driveSave('transcript-'+stamp+'.txt',full); }).then(function(){ $('saveWrap').textContent='Saved'; }).catch(function(e){ banner('Not saved: '+e.message); }); }
+ var full=lines.map(function(L){ return '['+clock(L.t)+'] '+(L.author||'?')+': '+L.text; }).join('\n'), w=wrapText;
+ function go(){ driveSave('wrap-'+stamp+'.txt',w).then(function(){ return driveSave('transcript-'+stamp+'.txt',full); }).then(function(){ savedWrap=w; saving=false; $('saveWrap').textContent='Saved'; }).catch(function(e){ saving=false; $('saveWrap').disabled=false; $('saveWrap').textContent='Save to Drive'; banner('Not saved: '+e.message); }); }
  if(driveLive()) go(); else connectDrive(go);
-};
-$('newCall').onclick=function(){ if(lines.length && !confirm('Clear this call\'s captions and people?')) return; lines=[]; byKey={}; cur={}; callSum=''; sumAt=0; sumLines=0; heardPeople={}; chosen={}; alertLog=[]; renderAlerts(); wrapText=''; wrapLines=0; renderTx(); renderCard(); $('wrapOut').textContent='New call. Tap Wrap at the end.'; $('copyWrap').disabled=true; $('saveWrap').disabled=true; $('saveWrap').textContent='Save to Drive'; showAsk('Nothing yet.','','',false); };
+}
+$('saveWrap').onclick=function(){ saveNow(false); };
+$('newCall').onclick=function(){ if(lines.length && !confirm('Clear this call\'s captions and people?')) return; oldSig={}; lines.forEach(function(L){ oldSig[sig(L.author,L.text)]=1; }); savedWrap=null; saving=false; lines=[]; byKey={}; cur={}; callSum=''; sumAt=0; sumLines=0; heardPeople={}; chosen={}; alertLog=[]; renderAlerts(); wrapText=''; wrapLines=0; renderTx(); renderCard(); $('wrapOut').textContent='New call. Tap Wrap at the end.'; $('copyWrap').disabled=true; $('saveWrap').disabled=true; $('saveWrap').textContent='Save to Drive'; showAsk('Nothing yet.','','',false); };
 })();
 </script>
 <script>

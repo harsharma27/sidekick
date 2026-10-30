@@ -3,13 +3,15 @@
 
 Usage: python3 -I tools/wfo_plan.py <jira_export.csv> <out.xlsx> [previous.xlsx]
 
-JQL for the export (columns Key, Summary, Status, Sprint, Labels, Assignee):
-  "Epic Link" in (CMCM-30655, CMCM-47698) OR key = CMCM-37518 ORDER BY key ASC
+JQL for the export (all fields, incl. Product Owner):
+  "Epic Link" in (CMCM-30655, CMCM-47698) ORDER BY key ASC
 
 Rules:
 - Stage and Sprint always come fresh from Jira.
 - Comments/Questions are carried forward from previous.xlsx by Story key (human edits win).
   New stories get a starter comment built from labels (SAP / Service Board / CP pair).
+- FS scope: only stories whose Product Owner is Thom Theara or Chancey Thompson (blank PO is kept
+  and flagged). Stories owned by other POs are excluded and listed as EXCLUDED (PO) in the output.
 - Prints a change summary (new stories, stage moves, sprint moves, dropped stories).
 """
 import csv, sys, collections, re
@@ -18,7 +20,7 @@ from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 
 HDR = ["Story", "Description", "Stage", "Proposed Quarterly", "Sprint", "Comments/Questions"]
 WFO_EPICS = {"CMCM-30655": "Q1'27", "CMCM-47698": "Q2'27 or later"}
-EXTRA_KEYS = {"CMCM-37518"}
+FS_POS = ("theara", "thompson")  # Thom, Chancey
 
 def read_csv(path):
     rows = list(csv.reader(open(path, encoding="utf-8-sig")))
@@ -30,7 +32,8 @@ def read_csv(path):
         out.append({"key": "; ".join(g("Issue key")), "type": "; ".join(g("Issue Type")),
                     "summary": " ".join(" ".join(g("Summary")).split()), "status": "; ".join(g("Status")),
                     "sprints": g("Sprint"), "labels": g("Labels"),
-                    "epic": "; ".join(g("Custom field (Epic Link)"))})
+                    "epic": "; ".join(g("Custom field (Epic Link)")),
+                    "po": "; ".join(g("Custom field (Product Owner)"))})
     return out
 
 def quarter(sprint, epic, status):
@@ -54,7 +57,12 @@ def starter_comment(it, by_summary):
 
 def main():
     src, out = sys.argv[1], sys.argv[2]; prev = sys.argv[3] if len(sys.argv) > 3 else None
-    items = [i for i in read_csv(src) if i["type"] == "Story" and (i["epic"] in WFO_EPICS or i["key"] in EXTRA_KEYS)]
+    items = [i for i in read_csv(src) if i["type"] == "Story" and i["epic"] in WFO_EPICS]
+    for i in [i for i in items if i["po"] and not any(n in i["po"].lower() for n in FS_POS)]:
+        print(f"EXCLUDED (PO) {i['key']} {i['po']}: {i['summary'][:60]}")
+    items = [i for i in items if not i["po"] or any(n in i["po"].lower() for n in FS_POS)]
+    for i in [i for i in items if not i["po"]]:
+        print(f"CHECK (no PO) {i['key']}: {i['summary'][:60]}")
     by_summary = {i["key"]: i["summary"].replace("[CP] - ", "").replace("[CP] ", "").strip().lower() for i in items}
     old = {}
     if prev:
@@ -85,7 +93,7 @@ def main():
             c.font = Font(name="Arial", size=10); c.alignment = Alignment(vertical="top", wrap_text=True)
             c.border = Border(top=thin, bottom=thin, left=thin, right=thin)
     n = len(rows) + 3
-    ws.cell(n, 1, "Source: Jira export of epics CMCM-30655 (Workforce Optimization Q1 2027) and CMCM-47698 (follow-up, Q2 2027 or later) plus CMCM-37518. Stage = Jira status; Sprint = Jira Sprint field (latest).").font = Font(name="Arial", size=9, italic=True)
+    ws.cell(n, 1, "Source: Jira export of epics CMCM-30655 (Workforce Optimization Q1 2027) and CMCM-47698 (follow-up, Q2 2027 or later) (Thom and Chancey stories only). Stage = Jira status; Sprint = Jira Sprint field (latest).").font = Font(name="Arial", size=9, italic=True)
     ws.merge_cells(start_row=n, start_column=1, end_row=n, end_column=6)
     ws.cell(n, 1).alignment = Alignment(wrap_text=True, vertical="top"); ws.row_dimensions[n].height = 30
     for col, wd in zip("ABCDEF", [13, 52, 20, 16, 18, 60]): ws.column_dimensions[col].width = wd

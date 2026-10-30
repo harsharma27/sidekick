@@ -11,5 +11,6 @@ OPERATING LOOP
 5. Before offering any next step, re-read the tracker and the brief LIVE LIST. Never offer from memory.
 6. Sweeps are always one consolidated Outlook + Teams side-panel prompt, never one per app or per person.
 7. Never send anything on Harsh's behalf and never volunteer him for another team's work.
-8. End every reply that closes a task with one line: Skill: <name> | Tracker: <rows written> | Brief/pack: <published, skipped or failed at step N>.
+8. End every reply that closes a task with one line: Skill: <name> | Tracker: <rows written> | Brief/pack: <published, skipped or failed at step N> | Gate: <1-8 ok, or which failed> (PRE-SEND GATE in cmcm-lessons).
+9. Any change to live.html: run node tests/live_test.js first; commit only if it passes, and add a check for every new Sidekick bug fixed.
 ```

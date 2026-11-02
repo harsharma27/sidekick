@@ -21,6 +21,7 @@ Anthropic API are mocked, nothing leaves the machine), then checks:
 | No page errors | script breaks |
 | Failing AI: at most 3 API hits in 8 s | retry storm that burned the 200-call cap with 0 tokens (2 Nov DSM) |
 | Failing AI: failures not counted as calls, shown on the pill | cap reached by failures; error hidden |
+| A saved usage count made only of failed calls does not keep the cap blocked | page still capped after reload on 2 Nov |
 
 Verified to fail on the pre-fix page (2 Nov checks: on 889510f, 8 API hits in 8 s and a duplicated caption)
 and earlier checks on the pre-fix page (commit 8d9a177: 4 wraps, 4 transcripts, old captions kept)

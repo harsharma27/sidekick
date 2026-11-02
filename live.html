@@ -344,7 +344,7 @@ var RULES='You support Harsh during a live Illumina CMCM Field Service work call
  'Spoken lines follow his voice: plain, polite, short sentences, full CMCM- prefix on story numbers, no em dashes, no jargon he would not use.';
 var usage=loadUsage(), lastReply='';
 function today(){ var d=new Date(); return d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate()); }
-function loadUsage(){ try{ var u=JSON.parse(localStorage.getItem(KEY+'_usage')||'null'); if(u&&u.day===today()) return u; }catch(e){} return {day:today(),calls:0,inTok:0,cacheTok:0,outTok:0}; }
+function loadUsage(){ try{ var u=JSON.parse(localStorage.getItem(KEY+'_usage')||'null'); if(u&&u.day===today()){ if(u.fails==null){ u.fails=0; if(!u.inTok&&!u.cacheTok&&!u.outTok){ u.fails=u.calls; u.calls=0; } } return u; } }catch(e){} return {day:today(),calls:0,fails:0,inTok:0,cacheTok:0,outTok:0}; } // older versions counted failed calls toward the cap
 var failRun=0, pausedUntil=0, lastAIErr='';
 function renderUsage(){ var paused=Date.now()<pausedUntil; $('aiPill').textContent='AI: '+usage.calls+' calls today ('+Math.round((usage.inTok+usage.cacheTok)/1000)+'k in, '+Math.round(usage.outTok/1000)+'k out)'+((usage.fails||0)?', '+usage.fails+' failed':'')+(paused?' | PAUSED: '+lastAIErr:''); $('aiPill').className='pill'+((usage.calls>=S.cap||paused)?' bad':''); }
 renderUsage();

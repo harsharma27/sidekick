@@ -97,6 +97,16 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail });
   check('Failing AI: failed calls not counted toward the cap', /AI: 0 calls today/.test(pill), pill);
   check('Failing AI: failures shown on the pill', /failed/.test(pill), pill);
   check('Failing AI: no page errors', errs2.length === 0, errs2);
+  // Scenario 5: a saved usage count made only of failed calls (old version) does not keep the cap blocked after reload.
+  const p3 = await b.newPage();
+  await p3.addInitScript(() => {
+    localStorage.setItem('sidekick_live', JSON.stringify({ apikey: 'x', gcid: 'y', gfolder: 'z', names: 'Harsh', mFast: 'f', mSmart: 's', cap: 200 }));
+    const d = new Date(); const pad = n => (n < 10 ? '0' : '') + n;
+    localStorage.setItem('sidekick_live_usage', JSON.stringify({ day: d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()), calls: 200, inTok: 0, cacheTok: 0, outTok: 0 }));
+  });
+  await p3.goto('file://' + harness);
+  const pill3 = await p3.textContent('#aiPill');
+  check('Old failed-only usage no longer blocks the cap', /AI: 0 calls today/.test(pill3) && /200 failed/.test(pill3), pill3);
   await b.close();
 
   let failed = 0;

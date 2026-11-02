@@ -250,6 +250,7 @@ function loadPackFromDrive(){
   .catch(function(e){ banner('Pack not loaded: '+e.message); });
 }
 $('driveBtn').onclick=function(){ connectDrive(loadPackFromDrive); };
+setInterval(function(){ if(driveLive()&&S.gfolder) loadPackFromDrive(); },600000); // keep pack and call sheets fresh during the day
 $('packBtn').onclick=function(){ connectDrive(loadPackFromDrive); };
 function driveSave(name,text){
  var b='skb'+Date.now(), meta={name:name,parents:[S.gfolder],mimeType:'text/plain'};
@@ -269,6 +270,7 @@ window.addEventListener('message',function(ev){
  lastMsg=Date.now();
  (m.caps||[]).forEach(function(c){
   if(!cur[c.id] && oldSig[sig(c.author,c.text)]) return; // caption still on the Teams screen from before New call
+  if(!cur[c.id]){ var sg=sig(c.author,c.text), rec=lines.slice(-30); for(var i=rec.length-1;i>=0;i--){ if(sig(rec[i].author,rec[i].text)===sg){ cur[c.id]=rec[i].key; return; } } } // Teams re-sent a caption under a new id
   var key=cur[c.id]||c.id, L=byKey[key];
   if(L&&L.text!==c.text){ var a=norm(L.text), b=norm(c.text), k=Math.min(12,a.length,b.length); if(L.author!==c.author||a.slice(0,k)!==b.slice(0,k)){ key=c.id+'#'+(++gen); cur[c.id]=key; L=null; } }
   if(!L){ L={key:key,author:c.author,text:c.text,t:Date.now(),changed:Date.now(),checked:false}; byKey[key]=L; lines.push(L); cur[c.id]=key; notePerson(c.author); renderTx(); }
@@ -307,7 +309,7 @@ function maybeSummarize(force){
  if(!lines.length) return;
  sumBusy=true;
  var q='Full caption transcript so far (newest last; captions can mishear words):\n'+transcript(400)+'\n\nSummarise the call so far for Harsh, who is listening. Plain text, under 180 words, these labels:\nTOPIC NOW: what is being discussed in the last few minutes (story numbers if said).\nEARLIER: topics already covered, one line each.\nDECISIONS: agreed outcomes, who owns them.\nASKED OF HARSH: anything put to Harsh by name or to the group he is part of, with who asked and roughly when; "none" if none.\nOPEN QUESTIONS: questions raised and not answered yet, with who asked.\nUse only what the captions say; mark unclear parts (as heard).';
- claude(S.mFast,q,700,{noSheet:true}).then(function(t){ callSum=t; sumAt=Date.now(); sumLines=lines.length; var b=$('sumBox'); if(b) b.textContent=t; }).catch(function(e){ logErr('summary: '+e.message); }).then(function(){ sumBusy=false; });
+ claude(S.mFast,q,700,{noSheet:true}).then(function(t){ callSum=t; sumAt=Date.now(); sumLines=lines.length; var b=$('sumBox'); if(b) b.textContent=t; }).catch(function(e){ logErr('summary: '+e.message); sumAt=Date.now(); sumLines=lines.length; }).then(function(){ sumBusy=false; });
 }
 function liveContext(n){
  return (callSum?'CALL SO FAR (running summary, may lag a few minutes):\n'+callSum+'\n\n':'')+'Recent captions (newest last):\n'+(lines.length?transcript(n||80):'(no captions yet)');
@@ -343,7 +345,8 @@ var RULES='You support Harsh during a live Illumina CMCM Field Service work call
 var usage=loadUsage(), lastReply='';
 function today(){ var d=new Date(); return d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate()); }
 function loadUsage(){ try{ var u=JSON.parse(localStorage.getItem(KEY+'_usage')||'null'); if(u&&u.day===today()) return u; }catch(e){} return {day:today(),calls:0,inTok:0,cacheTok:0,outTok:0}; }
-function renderUsage(){ $('aiPill').textContent='AI: '+usage.calls+' calls today ('+Math.round((usage.inTok+usage.cacheTok)/1000)+'k in, '+Math.round(usage.outTok/1000)+'k out)'; $('aiPill').className='pill'+(usage.calls>=S.cap?' bad':''); }
+var failRun=0, pausedUntil=0, lastAIErr='';
+function renderUsage(){ var paused=Date.now()<pausedUntil; $('aiPill').textContent='AI: '+usage.calls+' calls today ('+Math.round((usage.inTok+usage.cacheTok)/1000)+'k in, '+Math.round(usage.outTok/1000)+'k out)'+((usage.fails||0)?', '+usage.fails+' failed':'')+(paused?' | PAUSED: '+lastAIErr:''); $('aiPill').className='pill'+((usage.calls>=S.cap||paused)?' bad':''); }
 renderUsage();
 var errLog=[];
 function logErr(m){ errLog.push(clock(Date.now())+'  '+m); var el2=$('errLog'); if(el2) el2.textContent=errLog.slice().reverse().join('\n'); }
@@ -351,13 +354,12 @@ function claudeOnce(model,userText,maxTok,tmo,opts){
  var system=[{type:'text',text:RULES}];
  if(PACK) system.push({type:'text',text:'CONTEXT PACK (built '+(PACK.built||'?')+'):\n'+JSON.stringify(PACK),cache_control:{type:'ephemeral'}});
  var cst=(opts&&opts.noSheet)?'':callSheetText(); if(cst) system.push({type:'text',text:cst});
- usage.calls++; renderUsage();
  var ctl=new AbortController(), timer=setTimeout(function(){ ctl.abort(); },tmo);
  return fetch('https://api.anthropic.com/v1/messages',{method:'POST',signal:ctl.signal,headers:{'content-type':'application/json','x-api-key':S.apikey,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},
   body:JSON.stringify({model:model,max_tokens:maxTok,system:system,messages:[{role:'user',content:userText}]})})
   .then(function(r){ return r.json().then(function(j){ clearTimeout(timer); if(!r.ok){ var er=new Error((j.error&&j.error.message)||('API HTTP '+r.status)); er.retry=(r.status===429||r.status>=500||/overload/i.test(er.message)); throw er; } return j; },function(){ clearTimeout(timer); var er=new Error('API HTTP '+r.status+' (unreadable reply)'); er.retry=(r.status===429||r.status>=500); throw er; }); })
   .then(function(j){
-   var u=j.usage||{}; usage.inTok+=(u.input_tokens||0)+(u.cache_creation_input_tokens||0); usage.cacheTok+=(u.cache_read_input_tokens||0); usage.outTok+=(u.output_tokens||0);
+   usage.calls++; var u=j.usage||{}; usage.inTok+=(u.input_tokens||0)+(u.cache_creation_input_tokens||0); usage.cacheTok+=(u.cache_read_input_tokens||0); usage.outTok+=(u.output_tokens||0);
    try{ localStorage.setItem(KEY+'_usage',JSON.stringify(usage)); }catch(e){} renderUsage();
    var text=(j.content||[]).filter(function(c){return c.type==='text'}).map(function(c){return c.text}).join('\n').trim();
    lastReply='model '+(j.model||model)+' | stop '+(j.stop_reason||'?')+' | blocks '+(j.content||[]).map(function(c){return c.type}).join(',')+' | out '+((j.usage||{}).output_tokens||0)+' tokens\n'+text;
@@ -371,14 +373,16 @@ function claude(model,userText,maxTok,opts){
  if(!S.apikey) return Promise.reject(new Error('Add your Anthropic API key in settings.'));
  if(usage.day!==today()) usage=loadUsage();
  if(usage.calls>=S.cap) return Promise.reject(new Error('Daily AI cap reached ('+S.cap+'). Raise it in settings if needed.'));
+ if(Date.now()<pausedUntil) return Promise.reject(new Error('AI paused until '+clock(pausedUntil)+' after 3 failures in a row: '+lastAIErr+' (details in Setup > AI errors)'));
  var tok=Math.max(maxTok||0,2000), tmo=tok>=4000?180000:90000, tries=0;
  function attempt(){
   tries++;
-  return claudeOnce(model,userText,tok,tmo,opts).then(function(t){ banner(''); return t; },function(e){
-   logErr('try '+tries+': '+e.message);
+  return claudeOnce(model,userText,tok,tmo,opts).then(function(t){ failRun=0; banner(''); return t; },function(e){
+   logErr('try '+tries+': '+e.message); usage.fails=(usage.fails||0)+1; try{ localStorage.setItem(KEY+'_usage',JSON.stringify(usage)); }catch(x){}
    if(tries<3 && e.moreTokens){ tok=Math.min(tok*3,16000); banner('AI reply was cut short, retrying with more room...'); return attempt(); }
    if(tries<3 && e.retry){ var wait=tries===1?2000:6000; banner('AI busy ('+e.message+'), retrying in '+(wait/1000)+' s...'); return new Promise(function(res){ setTimeout(res,wait); }).then(attempt); }
-   throw e;
+   failRun++; lastAIErr=e.message; if(failRun>=3){ pausedUntil=Date.now()+300000; failRun=0; banner('AI paused for 5 minutes after 3 failures in a row: '+e.message); }
+   renderUsage(); throw e;
   });
  }
  return attempt();

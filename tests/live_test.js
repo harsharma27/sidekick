@@ -70,7 +70,33 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail });
   check('New call ignores old captions', !/old call line/.test(tx), tx.slice(0, 200));
   check('New call keeps new caption with recycled id', /new call first line/.test(tx), tx.slice(0, 200));
 
+  // Scenario 3: Teams re-sends captions already shown, under new ids -> no duplicate lines.
+  const before = await p.evaluate(() => document.getElementById('txCount').textContent);
+  await p.evaluate(() => window.postMessage({ sk: 'cap1', caps: [{ id: 'z9', author: 'Colleague, Other', text: 'new call first line' }] }, '*'));
+  await p.waitForTimeout(300);
+  const after = await p.evaluate(() => document.getElementById('txCount').textContent);
+  check('Re-sent caption with a new id is not duplicated', before === after, { before, after });
+
   check('No page errors', errors.length === 0, errors);
+
+  // Scenario 4: the AI API keeps failing -> no retry storm, failures not counted as calls, pause shown.
+  const p2 = await b.newPage();
+  const errs2 = [];
+  p2.on('pageerror', e => errs2.push(e.message));
+  let apiHits = 0;
+  await p2.route('https://api.anthropic.com/**', async r => { apiHits++; await r.fulfill({ status: 401, contentType: 'application/json', body: JSON.stringify({ error: { message: 'invalid x-api-key' } }) }); });
+  await p2.addInitScript(() => {
+    localStorage.setItem('sidekick_live', JSON.stringify({ apikey: 'x', gcid: 'y', gfolder: 'z', names: 'Harsh', mFast: 'f', mSmart: 's', cap: 200 }));
+  });
+  await p2.goto('file://' + harness);
+  const many = []; for (let i = 0; i < 60; i++) many.push({ id: 'm' + i, author: 'Speaker ' + (i % 4), text: 'status line number ' + i + ' about the release' });
+  await p2.evaluate(c => window.postMessage({ sk: 'cap1', caps: c }, '*'), many);
+  await p2.waitForTimeout(8000);
+  const pill = await p2.textContent('#aiPill');
+  check('Failing AI: no retry storm (at most 3 API hits in 8 s)', apiHits <= 3, { apiHits });
+  check('Failing AI: failed calls not counted toward the cap', /AI: 0 calls today/.test(pill), pill);
+  check('Failing AI: failures shown on the pill', /failed/.test(pill), pill);
+  check('Failing AI: no page errors', errs2.length === 0, errs2);
   await b.close();
 
   let failed = 0;

@@ -140,6 +140,47 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail });
   const out7 = await s7.pg.textContent('#wrapOut');
   check('Always cut short: at most 3 tries', s7.reqs.length <= 3, s7.reqs);
   check('Always cut short: the wrap is marked as cut short', /STILL PARTIAL/.test(out7) && /Cut short/.test(out7), out7);
+
+  // Scenario 8: an open question to the room about how the platform works (3 Nov PBR, Chancey on picklist order)
+  // -> room card explains it; nothing lands in "Asked of you"; tracker rules stay strict.
+  const room = JSON.stringify({ relevant: true, explain: 'ROOM EXPLAIN', say: 'ROOM SAY', check: 'ROOM CHECK', confidence: 'high' });
+  const mkRoom = async () => {
+    const pg = await b.newPage();
+    const errs = []; pg.on('pageerror', e => errs.push(e.message));
+    const bodies = [];
+    await pg.route('https://api.anthropic.com/**', async r => { const body = r.request().postData() || ''; bodies.push(body); await r.fulfill(reply(/PLATFORM MODE/.test(body) ? room : '{"for_me": false}', 'end_turn')); });
+    await pg.addInitScript(() => { localStorage.setItem('sidekick_live', JSON.stringify({ apikey: 'x', gcid: 'y', gfolder: 'z', names: 'Harsh', mFast: 'f', mSmart: 's', cap: 200 })); });
+    await pg.goto('file://' + harness);
+    const crowd = []; for (let i = 0; i < 6; i++) crowd.push({ id: 'p' + i, author: 'Person ' + i + ', Big', text: 'general discussion line number ' + i });
+    await pg.evaluate(c => window.postMessage({ sk: 'cap1', caps: c }, '*'), crowd);
+    await pg.waitForTimeout(300);
+    return { pg, errs, bodies };
+  };
+  const s8 = await mkRoom();
+  const ask8 = await s8.pg.textContent('#askWho');
+  await s8.pg.evaluate(() => window.postMessage({ sk: 'cap1', caps: [{ id: 'q1', author: 'Thompson, Chancey', text: 'Does anybody know, or can educate me on how this list order kind of works?' }] }, '*'));
+  await s8.pg.waitForTimeout(5000); // lines are checked once they have been stable for 2.5 s
+  const roomA8 = await s8.pg.textContent('#roomA'), roomSay8 = await s8.pg.textContent('#roomSay');
+  check('Room question: explanation shown in the chip-in card', /ROOM EXPLAIN/.test(roomA8) && /ROOM CHECK/.test(roomA8) && /ROOM SAY/.test(roomSay8), { roomA8, roomSay8 });
+  check('Room question: sent in platform mode', s8.bodies.some(x => /PLATFORM MODE/.test(x)), s8.bodies.length);
+  check('Room question: no "Asked of you" alert', (await s8.pg.textContent('#askWho')) === ask8, await s8.pg.textContent('#askWho'));
+  const sys8 = s8.bodies.length ? JSON.parse(s8.bodies[0]).system[0].text : '';
+  check('Tracker rule unchanged: never invent status, owners, dates or decisions', /Never invent status, owners, dates or decisions/.test(sys8) && /PLATFORM MODE only/.test(sys8), sys8.slice(0, 80));
+
+  // Scenario 9: ordinary chatter on a big call -> no AI call at all.
+  const s9 = await mkRoom();
+  await s9.pg.evaluate(() => window.postMessage({ sk: 'cap1', caps: [{ id: 'c9', author: 'Wegener, Hanna', text: 'Thanks everyone, that was helpful, talk to you all tomorrow.' }] }, '*'));
+  await s9.pg.waitForTimeout(4000);
+  check('Ordinary chatter: no AI call', s9.bodies.length === 0, s9.bodies.length);
+
+  // Scenario 10: the Explain button answers the last question even when the trigger missed it.
+  await s9.pg.evaluate(() => window.postMessage({ sk: 'cap1', caps: [{ id: 'c10', author: 'Katagi, Sachin', text: 'So the yellow ones are enabled for that type?' }] }, '*'));
+  await s9.pg.waitForTimeout(400);
+  const before10 = s9.bodies.length;
+  await s9.pg.click('#explainBtn');
+  await s9.pg.waitForTimeout(1000);
+  check('Explain button: answers the last question', s9.bodies.length === before10 + 1 && /ROOM EXPLAIN/.test(await s9.pg.textContent('#roomA')) && /yellow ones/.test(await s9.pg.textContent('#roomQ')), await s9.pg.textContent('#roomQ'));
+  check('Room questions: no page errors', s8.errs.length === 0 && s9.errs.length === 0, s8.errs.concat(s9.errs));
   await b.close();
 
   let failed = 0;

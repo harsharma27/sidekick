@@ -77,6 +77,14 @@ a.bm{display:inline-block;padding:7px 12px;border-radius:8px;background:var(--ch
  </div>
 </div>
 
+<div class="card" id="roomCard">
+ <h2>If you want to chip in</h2>
+ <div id="roomQ" class="muted">Open questions to the room about how Salesforce or ServiceMax works show up here, with a short explanation.</div>
+ <div id="roomA"></div>
+ <div id="roomSay"></div>
+ <div class="row" style="margin-top:8px"><button id="explainBtn">Explain the last question</button></div>
+</div>
+
 <div class="card" id="callCard">
  <h2>Call sheet</h2>
  <select id="callSel"></select>
@@ -330,17 +338,43 @@ function checkLine(L){
  else { var s=mentionsStory(L.text); if(s) why=s; }
  if(!why && /\?\s*$/.test(L.text) && Date.now()-lastNameAt<30000) why='a question after your name';
  if(!why && REQ.test(L.text) && L.text.length>25 && (smallCall() || Date.now()-lastMeAt<180000)) why='a request';
- if(!why) return;
+ if(!why){ if(isRoomQ(L.text)) roomAnswer(L,false); return; }
  var wait=15000-(Date.now()-lastAlertAt);
  if(wait>0){ setTimeout(function(){ lastAlertAt=Date.now(); gateThenAnswer(L,why); }, wait+200); lastAlertAt=Date.now()+wait; return; }
  lastAlertAt=Date.now();
  gateThenAnswer(L,why);
 }
 
+// ---------- room questions ----------
+var ROOMQ=/\b(does any(body|one) know|any(body|one) know|can (some(body|one)|any(body|one)) (explain|educate|help|tell)|educate me|how does (this|that|it|the)|how do (these|those|the|we)|why does|what happens (if|when)|is it possible|can we (have|make|add|set|change|move)|do you guys (think|know)|how (this|that) works)\b/i;
+var PLAT=/\b(picklist|pick list|field|layout|flexipage|page|flow|validation|profile|permission|record type|report|dashboard|list view|queue|lwc|component|sfm|wizard|servicemax|dependenc|controlling|formula|apex|trigger|value|order(ing)?|column|object|sharing|portal)\b/i;
+function isRoomQ(text){ var t=text||''; if(t.length<20) return false; return ROOMQ.test(t) || (/\?\s*$/.test(t) && PLAT.test(t)); }
+var lastRoomAt=0;
+function roomAnswer(L,manual){
+ if(!manual && Date.now()-lastRoomAt<45000) return;
+ lastRoomAt=Date.now();
+ $('roomQ').textContent=(L.author||'Someone')+' at '+clock(L.t)+': "'+L.text+'"'; $('roomA').textContent='Thinking...'; $('roomSay').textContent='';
+ var q='PLATFORM MODE.\nRecent captions (newest last):\n'+transcript(30)+'\n\nThe question to the room: '+(L.author||'?')+': '+L.text+'\n\nIf this is a question about how Salesforce or ServiceMax works (configuration, fields, picklists, layouts, permissions, flows, components, reports), explain it so Harsh can chip in: explain = at most 3 short plain sentences on how it works, using pack "platform" facts first and saying "general Salesforce" for anything else; say = one short sentence he could say, in his voice; check = what to verify in QA, a few words; confidence = high, medium or low. If it is not that kind of question, set relevant to false. Reply with JSON only: {"relevant": true|false, "explain": "...", "say": "...", "check": "...", "confidence": "..."}';
+ claude(S.mSmart,q,1200).then(function(t){
+  var a=parseJSON(t);
+  if(!a||!a.relevant){ if(manual){ $('roomA').textContent='Not a how-it-works question as far as the captions show.'; } else { $('roomQ').textContent='Open questions to the room about how Salesforce or ServiceMax works show up here, with a short explanation.'; $('roomA').textContent=''; } return; }
+  $('roomA').textContent=(a.explain||'')+(a.check?'\nCheck in QA: '+a.check:'')+(a.confidence?'\n(Confidence: '+a.confidence+')':'');
+  $('roomSay').textContent=a.say?'Say: '+a.say:'';
+ }).catch(function(e){ $('roomA').textContent='Explain failed: '+e.message; });
+}
+$('explainBtn').onclick=function(){
+ var pick=null;
+ for(var i=lines.length-1;i>=0 && i>=lines.length-25;i--){ var L=lines[i]; if(isMe(L.author)) continue; if(isRoomQ(L.text)||/\?\s*$/.test(L.text)){ pick=L; break; } }
+ if(!pick){ for(var j=lines.length-1;j>=0;j--){ if(!isMe(lines[j].author)){ pick=lines[j]; break; } } }
+ if(!pick){ $('roomA').textContent='No captions yet.'; return; }
+ roomAnswer(pick,true);
+};
+
 // ---------- Claude ----------
 var RULES='You support Harsh during a live Illumina CMCM Field Service work call. You get a Teams live-caption transcript with speaker names (captions can mishear words) and his CONTEXT PACK, a JSON export of his activity tracker: open items, whose court the ball is in, dates and log lines. '+
  'Ground every fact in the transcript or the pack. When you use the pack, cite the item and log date, for example (tracker g24, 23 Oct). Never invent status, owners, dates or decisions. If the pack does not cover it, say so plainly and give a safe holding line. '+
  'Stay in his lane as a junior BSA: functional scope, FR status, what he has checked, who he is waiting on. Never volunteer him for development, QA execution, root cause diagnosis or another owner\'s decision. '+
+ 'Exception, PLATFORM MODE only (the request says so): you may explain how Salesforce or ServiceMax works from general platform knowledge, plus any checked org facts in the pack "platform" list. Label general knowledge as such, say what to check in QA, and still never invent Illumina status, owners, dates or decisions. '+
  'Spoken lines follow his voice: plain, polite, short sentences, full CMCM- prefix on story numbers, no em dashes, no jargon he would not use.';
 var usage=loadUsage(), lastReply='';
 function today(){ var d=new Date(); return d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate()); }

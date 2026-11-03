@@ -24,10 +24,14 @@ Anthropic API are mocked, nothing leaves the machine), then checks:
 | A saved usage count made only of failed calls does not keep the cap blocked | page still capped after reload on 2 Nov |
 | A reply that hits the length limit is retried with more room; the full wrap is shown and saved | 435-byte cut-off wrap saved to Drive (3 Nov PBR) |
 | A reply that keeps hitting the limit: at most 3 tries, shown with a "Cut short" note | a cut-off wrap passing as complete |
+| An open "does anybody know how this works?" question to the room shows a chip-in explanation, not an "Asked of you" alert | silent Sidekick while Chancey asked how picklist order works (3 Nov PBR) |
+| The tracker rule (never invent status, owners, dates or decisions) is still in the rules, with platform mode as a labelled exception | general knowledge leaking into tracker answers |
+| Ordinary chatter on a big call makes no AI call | cost and noise from the new trigger |
+| "Explain the last question" answers the latest question even when the trigger missed it | missed questions with no way to ask |
 
 Verified to fail on the pre-fix page (2 Nov checks: on 889510f, 8 API hits in 8 s and a duplicated caption)
 and earlier checks on the pre-fix page (commit 8d9a177: 4 wraps, 4 transcripts, old captions kept)
-and pass on the fixed page (3a515e3). 3 Nov cut-short checks fail on ac132ec (only 1 try at 4000 tokens, partial wrap shown) and pass after the fix.
+and pass on the fixed page (3a515e3). 3 Nov cut-short checks fail on ac132ec (only 1 try at 4000 tokens, partial wrap shown) and pass after the fix. 3 Nov room-question checks fail on 0dba7d0 (no chip-in card) and pass after the change.
 
 If a harness patch reports "expected 1 match", `live.html` changed shape around Drive save,
 the message origin check or the Drive connect call: update the patch in `live_test.js`, never

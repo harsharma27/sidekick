@@ -87,7 +87,7 @@ def build_pack(items, static, today):
     """items = open/waiting, plus done items updated within 2 days (Pacific dates).
     Parked items stay out. Each item keeps its last 5 log lines clipped to 460 chars.
     Rows with group "Platform facts" are not items: their "facts" list (checked org facts,
-    up to 40, 400 chars each) goes into pack["platform"] for the Sidekick's room answers."""
+    up to 240, 400 chars each) goes into pack["platform"] for the Sidekick's room answers."""
     rows = []
     platform = []
     for key in sorted(items):
@@ -123,7 +123,7 @@ def build_pack(items, static, today):
         'voice': static['voice'],
         'people': static['people'],
         'stories': static['stories'],
-        'platform': platform[:40],
+        'platform': platform[:240],
         'items': rows,
     }
 

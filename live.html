@@ -365,6 +365,7 @@ function claudeOnce(model,userText,maxTok,tmo,opts){
    lastReply='model '+(j.model||model)+' | stop '+(j.stop_reason||'?')+' | blocks '+(j.content||[]).map(function(c){return c.type}).join(',')+' | out '+((j.usage||{}).output_tokens||0)+' tokens\n'+text;
    var lr=$('lastReply'); if(lr) lr.textContent=lastReply;
    if(!text){ var er=new Error('The AI sent no text back (stop: '+(j.stop_reason||'?')+').'); er.moreTokens=(j.stop_reason==='max_tokens'); throw er; }
+   if(j.stop_reason==='max_tokens'){ var ec=new Error('The AI reply was cut short (length limit).'); ec.moreTokens=true; ec.partial=text; throw ec; }
    return text;
   },function(e){ clearTimeout(timer); if(e.name==='AbortError'){ var er=new Error('The AI request timed out.'); er.retry=true; throw er; } if(e instanceof TypeError){ e.retry=true; } throw e; });
 }
@@ -380,6 +381,7 @@ function claude(model,userText,maxTok,opts){
   return claudeOnce(model,userText,tok,tmo,opts).then(function(t){ failRun=0; banner(''); return t; },function(e){
    logErr('try '+tries+': '+e.message); usage.fails=(usage.fails||0)+1; try{ localStorage.setItem(KEY+'_usage',JSON.stringify(usage)); }catch(x){}
    if(tries<3 && e.moreTokens){ tok=Math.min(tok*3,16000); banner('AI reply was cut short, retrying with more room...'); return attempt(); }
+   if(e.partial){ banner('AI reply still cut short after retries; showing what came back.'); return e.partial+'\n\n(Cut short: the reply hit the length limit.)'; }
    if(tries<3 && e.retry){ var wait=tries===1?2000:6000; banner('AI busy ('+e.message+'), retrying in '+(wait/1000)+' s...'); return new Promise(function(res){ setTimeout(res,wait); }).then(attempt); }
    failRun++; lastAIErr=e.message; if(failRun>=3){ pausedUntil=Date.now()+300000; failRun=0; banner('AI paused for 5 minutes after 3 failures in a row: '+e.message); }
    renderUsage(); throw e;

@@ -22,10 +22,12 @@ Anthropic API are mocked, nothing leaves the machine), then checks:
 | Failing AI: at most 3 API hits in 8 s | retry storm that burned the 200-call cap with 0 tokens (2 Nov DSM) |
 | Failing AI: failures not counted as calls, shown on the pill | cap reached by failures; error hidden |
 | A saved usage count made only of failed calls does not keep the cap blocked | page still capped after reload on 2 Nov |
+| A reply that hits the length limit is retried with more room; the full wrap is shown and saved | 435-byte cut-off wrap saved to Drive (3 Nov PBR) |
+| A reply that keeps hitting the limit: at most 3 tries, shown with a "Cut short" note | a cut-off wrap passing as complete |
 
 Verified to fail on the pre-fix page (2 Nov checks: on 889510f, 8 API hits in 8 s and a duplicated caption)
 and earlier checks on the pre-fix page (commit 8d9a177: 4 wraps, 4 transcripts, old captions kept)
-and pass on the fixed page (3a515e3).
+and pass on the fixed page (3a515e3). 3 Nov cut-short checks fail on ac132ec (only 1 try at 4000 tokens, partial wrap shown) and pass after the fix.
 
 If a harness patch reports "expected 1 match", `live.html` changed shape around Drive save,
 the message origin check or the Drive connect call: update the patch in `live_test.js`, never

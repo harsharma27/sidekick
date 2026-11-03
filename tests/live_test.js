@@ -107,6 +107,39 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail });
   await p3.goto('file://' + harness);
   const pill3 = await p3.textContent('#aiPill');
   check('Old failed-only usage no longer blocks the cap', /AI: 0 calls today/.test(pill3) && /200 failed/.test(pill3), pill3);
+
+  // Scenario 6: the wrap reply hits the length limit once -> retried with more room, full wrap shown and saved (3 Nov PBR: 435-byte wrap saved).
+  const mkPage = async (handler) => {
+    const pg = await b.newPage();
+    const errs = []; pg.on('pageerror', e => errs.push(e.message)); pg.on('dialog', d => d.accept());
+    const reqs = [];
+    await pg.route('https://api.anthropic.com/**', async r => { const body = JSON.parse(r.request().postData() || '{}'); reqs.push(body.max_tokens); await r.fulfill(handler(reqs.length, body)); });
+    await pg.addInitScript(() => { localStorage.setItem('sidekick_live', JSON.stringify({ apikey: 'x', gcid: 'y', gfolder: 'z', names: 'Harsh', mFast: 'f', mSmart: 's', cap: 200 })); });
+    await pg.goto('file://' + harness);
+    await pg.evaluate(c => window.postMessage({ sk: 'cap1', caps: c }, '*'), [{ id: 'w1', author: 'Colleague, Test', text: 'wrap test line' }]);
+    await pg.waitForTimeout(300);
+    return { pg, errs, reqs };
+  };
+  const reply = (text, stop) => ({ status: 200, contentType: 'application/json', body: JSON.stringify({ model: 'm', stop_reason: stop, content: [{ type: 'text', text }], usage: { input_tokens: 1, output_tokens: 1 } }) });
+  const s6 = await mkPage((n) => n === 1 ? reply('PARTIAL WRAP', 'max_tokens') : reply('FULL WRAP TEXT', 'end_turn'));
+  await s6.pg.click('#wrapBtn');
+  await s6.pg.waitForTimeout(1500);
+  const out6 = await s6.pg.textContent('#wrapOut');
+  await s6.pg.evaluate(() => document.getElementById('saveWrap').click());
+  await s6.pg.waitForTimeout(900);
+  const saves6 = await s6.pg.evaluate(() => (window.__saves || []).slice());
+  check('Cut-short wrap is retried with more room', s6.reqs.length === 2 && s6.reqs[1] > s6.reqs[0], s6.reqs);
+  check('Cut-short wrap: the full wrap is shown, not the partial', out6.trim() === 'FULL WRAP TEXT', out6);
+  check('Cut-short wrap: Save writes one wrap after the retry', saves6.filter(s => /wrap/i.test(s)).length === 1, saves6);
+  check('Cut-short wrap: no page errors', s6.errs.length === 0, s6.errs);
+
+  // Scenario 7: every reply hits the length limit -> at most 3 tries, partial shown with a clear "cut short" note.
+  const s7 = await mkPage(() => reply('STILL PARTIAL', 'max_tokens'));
+  await s7.pg.click('#wrapBtn');
+  await s7.pg.waitForTimeout(2000);
+  const out7 = await s7.pg.textContent('#wrapOut');
+  check('Always cut short: at most 3 tries', s7.reqs.length <= 3, s7.reqs);
+  check('Always cut short: the wrap is marked as cut short', /STILL PARTIAL/.test(out7) && /Cut short/.test(out7), out7);
   await b.close();
 
   let failed = 0;

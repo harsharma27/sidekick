@@ -36,3 +36,16 @@ and pass on the fixed page (3a515e3). 3 Nov cut-short checks fail on ac132ec (on
 If a harness patch reports "expected 1 match", `live.html` changed shape around Drive save,
 the message origin check or the Drive connect call: update the patch in `live_test.js`, never
 delete the check. When a new Sidekick bug is fixed, add a check for it here in the same commit.
+
+## wfo_plan_test.py (WFO story plan builder)
+
+**Run before every commit that touches `tools/wfo_plan.py`.**
+
+```
+python3 -I tests/wfo_plan_test.py
+```
+
+Synthetic exports only. Checks that a cut-off Jira CSV (a row shorter than the header) stops the build
+with exit 2, writes no workbook and reports no DROPPED stories (4 Nov 2026: a cut-off all-fields export
+would have shown CMCM-48928, CMCM-49795 and CMCM-49957 as dropped), and that a story that really left
+the epic is still reported with where it went. 6 of 7 checks fail on the pre-fix script.

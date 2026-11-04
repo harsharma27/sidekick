@@ -22,9 +22,29 @@ HDR = ["Story", "Description", "Stage", "Proposed Quarterly", "Sprint", "Comment
 WFO_EPICS = {"CMCM-30655": "Q1'27", "CMCM-47698": "Q2'27 or later"}
 FS_POS = ("theara", "thompson")  # Thom, Chancey
 
+class IncompleteExport(Exception):
+    pass
+
 def read_csv(path):
-    rows = list(csv.reader(open(path, encoding="utf-8-sig")))
-    h = rows[0]; idx = collections.defaultdict(list)
+    """Read a Jira CSV export. Refuses a cut-off file (a download or upload that stopped early):
+    every row must have as many columns as the header, and the file must parse to the end.
+    A cut-off file would otherwise silently lose fields (epic, PO) on the last row and drop every
+    story after it, which then shows up as DROPPED in the change summary (4 Nov 2026)."""
+    try:
+        rows = list(csv.reader(open(path, encoding="utf-8-sig")))
+    except csv.Error as e:
+        raise IncompleteExport(f"the CSV does not parse to the end ({e})")
+    if not rows:
+        raise IncompleteExport("the file is empty")
+    h = rows[0]
+    short = [(n, len(r)) for n, r in enumerate(rows[1:], start=2) if r and len(r) != len(h)]
+    if short:
+        n, got = short[0]
+        raise IncompleteExport(f"row {n} has {got} of {len(h)} columns, so the file was cut off "
+                               f"({len(short)} bad row(s)). Re-export with fewer columns: "
+                               "List view, Columns = Key, Summary, Issue Type, Status, Sprint, Epic Link, "
+                               "Product Owner, Labels, then Export CSV (current fields)")
+    idx = collections.defaultdict(list)
     for i, c in enumerate(h): idx[c].append(i)
     out = []
     for r in rows[1:]:
@@ -57,7 +77,12 @@ def starter_comment(it, by_summary):
 
 def main():
     src, out = sys.argv[1], sys.argv[2]; prev = sys.argv[3] if len(sys.argv) > 3 else None
-    items = [i for i in read_csv(src) if i["type"] == "Story" and i["epic"] in WFO_EPICS]
+    try:
+        exported = read_csv(src)
+    except IncompleteExport as e:
+        print(f"STOPPED: export not usable, nothing written: {e}.")
+        sys.exit(2)
+    items = [i for i in exported if i["type"] == "Story" and i["epic"] in WFO_EPICS]
     for i in [i for i in items if i["po"] and not any(n in i["po"].lower() for n in FS_POS)]:
         print(f"EXCLUDED (PO) {i['key']} {i['po']}: {i['summary'][:60]}")
     items = [i for i in items if not i["po"] or any(n in i["po"].lower() for n in FS_POS)]
@@ -81,7 +106,11 @@ def main():
             if o[2] != it["status"]: changes.append(f"STAGE {it['key']}: {o[2]} -> {it['status']}")
             if o[4] != sprint: changes.append(f"SPRINT {it['key']}: {o[4]} -> {sprint}")
     for k in old:
-        if k not in {r[0] for r in rows}: changes.append(f"DROPPED {k} (no longer in the export)")
+        if k not in {r[0] for r in rows}:
+            where = next((i for i in exported if i["key"] == k), None)
+            why = (f"still in the export but now {where['type']}, epic {where['epic'] or 'none'}, PO {where['po'] or 'none'}"
+                   if where else "not in the export: check Jira (epic changed, cancelled or deleted)")
+            changes.append(f"DROPPED {k} ({why})")
     wb = Workbook(); ws = wb.active; ws.title = "WFO Stories"; ws.append(HDR)
     for r in rows: ws.append(r)
     thin = Side(style="thin", color="BFBFBF")

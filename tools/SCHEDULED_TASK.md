@@ -19,7 +19,7 @@ Hard rules: never send any email, Teams, Jira or chat message; never create, edi
 
 1. Check the time in America/Vancouver. If it is Saturday or Sunday, or earlier than 08:00 or later than 17:59, stop with one line "outside hours".
 2. Clone the GitHub repo harsharma27/sidekick (main branch) into the working directory if it is not already there, and pull the latest main.
-3. Read tools/RUNBOOK.md and follow it exactly, step by step, using a fresh empty scratch folder as $W and running the script with python3 -I from the repo root. Load tools with ToolSearch as needed (ArtifactData; Google Drive search_files, download_file_content, create_file, get_file_metadata, trash_file; Google Docs read_doc, update_doc).
+3. Read tools/RUNBOOK.md and follow it exactly, step by step, using a fresh empty scratch folder as $W and running the script with python3 -I from the repo root. Load tools with ToolSearch as needed (mcp__claude-code-remote__add_repo for the private tracker repo; Google Drive search_files, download_file_content, create_file, get_file_metadata, trash_file; Google Docs read_doc, update_doc).
 4. Stop at the first failed step. Do not retry more than the RUNBOOK allows, and do not write anything after a failed step.
 5. Finish with one short line: "published" (with fingerprint, section counts, new pack id and bytes), "no change" (doc-plan said skip and the pack size matched), or "failed at step N: <reason>". Only if a step failed, send one push notification with that line.
 ```

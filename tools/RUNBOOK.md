@@ -16,7 +16,7 @@ IDs
 
 | What | ID |
 |---|---|
-| Tracker artifact | `https://claude.ai/artifact/1FCGiFDQmJqfD8a9bQmuYp`, collection `items` |
+| Tracker | private repo `harsharma27/cmcm-tracker`, file `tracker.log` (event log; replay with `tools/tracker_log.py`). The claude.ai artifact `1FCGiFDQmJqfD8a9bQmuYp` is a frozen read-only archive since 6 Nov 2026: never read it for live state |
 | Brief (Google Doc) | `1gsEmxOtWEeuXBIMz6NP-atAcFaJ_5QnXfwqRAWj3S9I` |
 | Drive folder (pack lives here) | `1uE4jqez2KWso72d1MR8oEL0eb6Q0nGHV` |
 
@@ -25,10 +25,13 @@ IDs
 Set `W` to an empty scratch folder (for example `$SCRATCH/live`; `mkdir -p "$W"`).
 Run the script from the repo root with `python3 -I tools/build_live.py ...`.
 
-1. **Export the tracker.** `ArtifactData` (load with ToolSearch `select:ArtifactData`):
-   `action: "list"`, `url` = tracker, `collection: "items"`, `query: {"limit": 500}`,
-   `out_dir: "$W/export"`. Pass: it says N documents saved, N > 0, and there is no
-   `next_cursor`. (If there is one, list again with that cursor into the same folder.)
+1. **Export the tracker.** Attach the private repo first: `mcp__claude-code-remote__add_repo`
+   with owner `harsharma27`, repo `cmcm-tracker`, access `read` (load it with ToolSearch if
+   needed). Then `git clone --depth 1 https://github.com/harsharma27/cmcm-tracker "$W/trk"` and
+   `python3 -I tools/tracker_log.py replay "$W/trk/tracker.log" "$W/export"`.
+   Pass: the replay prints `"ok": true` with `rows` above 100. If the repo cannot be attached or
+   cloned, or the replay refuses (exit 2), stop: nothing has been written. Never fall back to the
+   frozen claude.ai artifact.
 
 2. **Get the current pack.** `Google_Drive search_files` with query
    `parentId = '1uE4jqez2KWso72d1MR8oEL0eb6Q0nGHV' and title = 'sidekick-pack.json'`,
@@ -101,3 +104,11 @@ the error, and confirmation that nothing after it was written.
   last 5 log lines clipped to 460 characters.
 - The fingerprint covers the tracker items and today's date, so an unchanged tracker on the
   same day is a no-op.
+
+## Writing to the tracker (interactive sessions only; scheduled tasks never write)
+
+Clone or pull `harsharma27/cmcm-tracker`, then for each change run, from the sidekick repo root:
+`python3 -I tools/tracker_log.py append <clone>/tracker.log <row> <SET|LOG|NEW> '<json>'`
+(SET = changed fields, never `log`; LOG = one `{"d","t"}` line; NEW = a whole new row). A refusal
+(exit 2) leaves the file untouched. Then `git -C <clone> commit -am "<row>: <what>"` and
+`git -C <clone> push`; if the push is rejected, `git pull --rebase` once and push again.

@@ -128,6 +128,7 @@ a.bm{display:inline-block;padding:7px 12px;border-radius:8px;background:var(--ch
   <p><b>Bookmark (once):</b> drag this onto the Brave bookmarks bar, then click it on the Teams meeting tab after turning on live captions.</p>
   <p><a class="bm" id="bm" href="#">Sidekick live</a></p>
   <label>Anthropic API key (kept in this browser only)</label><input type="password" id="apikey">
+  <label>OpenRouter API key (optional, kept in this browser only; used only for model ids with a "/", e.g. openai/gpt-5; set a spend limit on the key)</label><input type="password" id="orkey">
   <label>Google client ID (for the Drive pack and wraps)</label><input type="text" id="gcid">
   <label>Drive folder ID (Sidekick folder)</label><input type="text" id="gfolder">
   <label>Your name forms in captions, comma-separated</label><input type="text" id="names" placeholder="Harsh, Harsha, Sharma, Harsh">
@@ -187,12 +188,14 @@ a.bm{display:inline-block;padding:7px 12px;border-radius:8px;background:var(--ch
 (function(){
 'use strict';
 var $=function(id){return document.getElementById(id)};
-var S={apikey:'',gcid:'',gfolder:'',names:'Harsh, Harsha, Sharma, Harsh',mFast:'claude-haiku-5-5',mSmart:'claude-sonnet-5-5',cap:200};
+var S={apikey:'',orkey:'',gcid:'',gfolder:'',names:'Harsh, Harsha, Sharma, Harsh',mFast:'claude-haiku-5-5',mSmart:'claude-sonnet-5-5',cap:200};
+// Fallback Claude models when OpenRouter fails during a call (5 Nov 2026, sk03): a call never depends on a new provider.
+var FB_FAST='claude-haiku-5-5', FB_SMART='claude-sonnet-5-5';
 var KEY='sidekick_live';
 try{ var old=JSON.parse(localStorage.getItem('sidekick')||'null'); if(old){ S.apikey=old.apikey||''; S.gcid=old.gcid||''; S.gfolder=old.gfolder||''; } }catch(e){}
 try{ var s=JSON.parse(localStorage.getItem(KEY)||'null'); if(s) Object.keys(s).forEach(function(k){ S[k]=s[k]; }); }catch(e){}
-['apikey','gcid','gfolder','names','mFast','mSmart','cap'].forEach(function(k){ $(k).value=S[k]; });
-function saveSettings(){ ['apikey','gcid','gfolder','names','mFast','mSmart'].forEach(function(k){ S[k]=$(k).value.trim(); }); S.cap=parseInt($('cap').value,10)||200; try{ localStorage.setItem(KEY,JSON.stringify(S)); }catch(e){} }
+['apikey','orkey','gcid','gfolder','names','mFast','mSmart','cap'].forEach(function(k){ $(k).value=S[k]==null?'':S[k]; });
+function saveSettings(){ ['apikey','orkey','gcid','gfolder','names','mFast','mSmart'].forEach(function(k){ S[k]=$(k).value.trim(); }); S.cap=parseInt($('cap').value,10)||200; try{ localStorage.setItem(KEY,JSON.stringify(S)); }catch(e){} }
 $('saveBtn').onclick=function(){ saveSettings(); $('setStatus').textContent='Saved.'; };
 if(!S.apikey||!S.gcid) $('setup').open=true;
 
@@ -379,8 +382,8 @@ var RULES='You support Harsh during a live Illumina CMCM Field Service work call
 var usage=loadUsage(), lastReply='';
 function today(){ var d=new Date(); return d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate()); }
 function loadUsage(){ try{ var u=JSON.parse(localStorage.getItem(KEY+'_usage')||'null'); if(u&&u.day===today()){ if(u.fails==null){ u.fails=0; if(!u.inTok&&!u.cacheTok&&!u.outTok){ u.fails=u.calls; u.calls=0; } } return u; } }catch(e){} return {day:today(),calls:0,fails:0,inTok:0,cacheTok:0,outTok:0}; } // older versions counted failed calls toward the cap
-var failRun=0, pausedUntil=0, lastAIErr='';
-function renderUsage(){ var paused=Date.now()<pausedUntil; $('aiPill').textContent='AI: '+usage.calls+' calls today ('+Math.round((usage.inTok+usage.cacheTok)/1000)+'k in, '+Math.round(usage.outTok/1000)+'k out)'+((usage.fails||0)?', '+usage.fails+' failed':'')+(paused?' | PAUSED: '+lastAIErr:''); $('aiPill').className='pill'+((usage.calls>=S.cap||paused)?' bad':''); }
+var failRun=0, pausedUntil=0, lastAIErr='', orFail=0, orDown=false;
+function renderUsage(){ var paused=Date.now()<pausedUntil; $('aiPill').textContent='AI: '+usage.calls+' calls today ('+Math.round((usage.inTok+usage.cacheTok)/1000)+'k in, '+Math.round(usage.outTok/1000)+'k out)'+((usage.orIn||usage.orOut)?', OpenRouter '+Math.round((usage.orIn||0)/1000)+'k in':'')+(orDown?', OpenRouter down: using Claude':'')+((usage.fails||0)?', '+usage.fails+' failed':'')+(paused?' | PAUSED: '+lastAIErr:''); $('aiPill').className='pill'+((usage.calls>=S.cap||paused)?' bad':''); }
 renderUsage();
 var errLog=[];
 function logErr(m){ errLog.push(clock(Date.now())+'  '+m); var el2=$('errLog'); if(el2) el2.textContent=errLog.slice().reverse().join('\n'); }
@@ -394,26 +397,53 @@ function claudeOnce(model,userText,maxTok,tmo,opts){
   .then(function(r){ return r.json().then(function(j){ clearTimeout(timer); if(!r.ok){ var er=new Error((j.error&&j.error.message)||('API HTTP '+r.status)); er.retry=(r.status===429||r.status>=500||/overload/i.test(er.message)); throw er; } return j; },function(){ clearTimeout(timer); var er=new Error('API HTTP '+r.status+' (unreadable reply)'); er.retry=(r.status===429||r.status>=500); throw er; }); })
   .then(function(j){
    usage.calls++; var u=j.usage||{}; usage.inTok+=(u.input_tokens||0)+(u.cache_creation_input_tokens||0); usage.cacheTok+=(u.cache_read_input_tokens||0); usage.outTok+=(u.output_tokens||0);
-   try{ localStorage.setItem(KEY+'_usage',JSON.stringify(usage)); }catch(e){} renderUsage();
    var text=(j.content||[]).filter(function(c){return c.type==='text'}).map(function(c){return c.text}).join('\n').trim();
-   lastReply='model '+(j.model||model)+' | stop '+(j.stop_reason||'?')+' | blocks '+(j.content||[]).map(function(c){return c.type}).join(',')+' | out '+((j.usage||{}).output_tokens||0)+' tokens\n'+text;
-   var lr=$('lastReply'); if(lr) lr.textContent=lastReply;
-   if(!text){ var er=new Error('The AI sent no text back (stop: '+(j.stop_reason||'?')+').'); er.moreTokens=(j.stop_reason==='max_tokens'); throw er; }
-   if(j.stop_reason==='max_tokens'){ var ec=new Error('The AI reply was cut short (length limit).'); ec.moreTokens=true; ec.partial=text; throw ec; }
-   return text;
-  },function(e){ clearTimeout(timer); if(e.name==='AbortError'){ var er=new Error('The AI request timed out.'); er.retry=true; throw er; } if(e instanceof TypeError){ e.retry=true; } throw e; });
+   return finishReply('Anthropic',j.model||model,j.stop_reason,(j.content||[]).map(function(c){return c.type}).join(','),u.output_tokens||0,text,j.stop_reason==='max_tokens');
+  },netErr(timer));
 }
+function netErr(timer){ return function(e){ clearTimeout(timer); if(e.name==='AbortError'){ var er=new Error('The AI request timed out.'); er.retry=true; throw er; } if(e instanceof TypeError){ e.retry=true; } throw e; }; }
+// Shared reply checks for every provider: usage saved, last reply shown, empty and cut-short replies flagged.
+function finishReply(prov,model,stop,blocks,outTok,text,cut){
+ try{ localStorage.setItem(KEY+'_usage',JSON.stringify(usage)); }catch(e){} renderUsage();
+ lastReply=prov+' | model '+model+' | stop '+(stop||'?')+' | blocks '+blocks+' | out '+outTok+' tokens\n'+text;
+ var lr=$('lastReply'); if(lr) lr.textContent=lastReply;
+ if(!text){ var er=new Error('The AI sent no text back (stop: '+(stop||'?')+').'); er.moreTokens=cut; throw er; }
+ if(cut){ var ec=new Error('The AI reply was cut short (length limit).'); ec.moreTokens=true; ec.partial=text; throw ec; }
+ return text;
+}
+// OpenRouter (5 Nov 2026, sk03): model ids with a "/" go here, straight from the browser (no hub).
+// provider.data_collection=deny: only providers that do not store or train on prompts.
+function orOnce(model,userText,maxTok,tmo,opts){
+ var sys=RULES; if(PACK) sys+='\n\nCONTEXT PACK (built '+(PACK.built||'?')+'):\n'+JSON.stringify(PACK);
+ var cst=(opts&&opts.noSheet)?'':callSheetText(); if(cst) sys+='\n\n'+cst;
+ var ctl=new AbortController(), timer=setTimeout(function(){ ctl.abort(); },tmo);
+ return fetch('https://openrouter.ai/api/v1/chat/completions',{method:'POST',signal:ctl.signal,headers:{'content-type':'application/json','authorization':'Bearer '+S.orkey,'x-title':'Sidekick'},
+  body:JSON.stringify({model:model,max_tokens:maxTok,provider:{data_collection:'deny'},messages:[{role:'system',content:sys},{role:'user',content:userText}]})})
+  .then(function(r){ return r.json().then(function(j){ clearTimeout(timer); if(!r.ok||j.error){ var er=new Error('OpenRouter: '+((j.error&&j.error.message)||('HTTP '+r.status))); er.retry=(r.status===429||r.status>=500); throw er; } return j; },function(){ clearTimeout(timer); var er=new Error('OpenRouter HTTP '+r.status+' (unreadable reply)'); er.retry=(r.status===429||r.status>=500); throw er; }); })
+  .then(function(j){
+   usage.calls++; var u=j.usage||{}, cached=((u.prompt_tokens_details||{}).cached_tokens)||0;
+   usage.orIn=(usage.orIn||0)+(u.prompt_tokens||0); usage.orOut=(usage.orOut||0)+(u.completion_tokens||0);
+   usage.inTok+=(u.prompt_tokens||0)-cached; usage.cacheTok+=cached; usage.outTok+=(u.completion_tokens||0);
+   var c=(j.choices||[])[0]||{}, msg=c.message||{}, text=(typeof msg.content==='string'?msg.content:'').trim();
+   return finishReply('OpenRouter',j.model||model,c.finish_reason,'text',u.completion_tokens||0,text,c.finish_reason==='length');
+  },netErr(timer));
+}
+function viaOR(model){ return /\//.test(model||'') && !orDown; }
+function fallbackModel(model){ return model===S.mFast?FB_FAST:FB_SMART; }
 // retries: more room when the reply ran out of tokens, and a short wait on rate limit, overload, network error or timeout
 function claude(model,userText,maxTok,opts){
- if(!S.apikey) return Promise.reject(new Error('Add your Anthropic API key in settings.'));
+ if(viaOR(model) && !S.orkey) return Promise.reject(new Error('Model '+model+' needs the OpenRouter key in settings.'));
+ if(!viaOR(model) && !S.apikey) return Promise.reject(new Error('Add your Anthropic API key in settings.'));
  if(usage.day!==today()) usage=loadUsage();
  if(usage.calls>=S.cap) return Promise.reject(new Error('Daily AI cap reached ('+S.cap+'). Raise it in settings if needed.'));
  if(Date.now()<pausedUntil) return Promise.reject(new Error('AI paused until '+clock(pausedUntil)+' after 3 failures in a row: '+lastAIErr+' (details in Setup > AI errors)'));
  var tok=Math.max(maxTok||0,2000), tmo=tok>=4000?180000:90000, tries=0;
  function attempt(){
   tries++;
-  return claudeOnce(model,userText,tok,tmo,opts).then(function(t){ failRun=0; banner(''); return t; },function(e){
-   logErr('try '+tries+': '+e.message); usage.fails=(usage.fails||0)+1; try{ localStorage.setItem(KEY+'_usage',JSON.stringify(usage)); }catch(x){}
+  var or=viaOR(model), m=or?model:(/\//.test(model)?fallbackModel(model):model);
+  return (or?orOnce:claudeOnce)(m,userText,tok,tmo,opts).then(function(t){ failRun=0; if(or) orFail=0; banner(''); return t; },function(e){
+   logErr('try '+tries+': '+e.message);
+   if(or && !e.moreTokens){ orFail++; if(orFail>=2){ orDown=true; orFail=0; logErr('OpenRouter failed twice in a row: using '+fallbackModel(model)+' for the rest of this call'); banner('OpenRouter is failing: switched to Claude for the rest of this call.'); renderUsage(); if(S.apikey){ tries=0; return attempt(); } } } usage.fails=(usage.fails||0)+1; try{ localStorage.setItem(KEY+'_usage',JSON.stringify(usage)); }catch(x){}
    if(tries<3 && e.moreTokens){ tok=Math.min(tok*3,16000); banner('AI reply was cut short, retrying with more room...'); return attempt(); }
    if(e.partial){ banner('AI reply still cut short after retries; showing what came back.'); return e.partial+'\n\n(Cut short: the reply hit the length limit.)'; }
    if(tries<3 && e.retry){ var wait=tries===1?2000:6000; banner('AI busy ('+e.message+'), retrying in '+(wait/1000)+' s...'); return new Promise(function(res){ setTimeout(res,wait); }).then(attempt); }
@@ -629,7 +659,7 @@ function saveNow(rewrapped){
  if(driveLive()) go(); else connectDrive(go);
 }
 $('saveWrap').onclick=function(){ saveNow(false); };
-$('newCall').onclick=function(){ if(lines.length && !confirm('Clear this call\'s captions and people?')) return; oldSig={}; lines.forEach(function(L){ oldSig[sig(L.author,L.text)]=1; }); savedWrap=null; saving=false; lines=[]; byKey={}; cur={}; callSum=''; sumAt=0; sumLines=0; heardPeople={}; chosen={}; alertLog=[]; renderAlerts(); wrapText=''; wrapLines=0; renderTx(); renderCard(); $('wrapOut').textContent='New call. Tap Wrap at the end.'; $('copyWrap').disabled=true; $('saveWrap').disabled=true; $('saveWrap').textContent='Save to Drive'; showAsk('Nothing yet.','','',false); };
+$('newCall').onclick=function(){ if(lines.length && !confirm('Clear this call\'s captions and people?')) return; orDown=false; orFail=0; renderUsage(); oldSig={}; lines.forEach(function(L){ oldSig[sig(L.author,L.text)]=1; }); savedWrap=null; saving=false; lines=[]; byKey={}; cur={}; callSum=''; sumAt=0; sumLines=0; heardPeople={}; chosen={}; alertLog=[]; renderAlerts(); wrapText=''; wrapLines=0; renderTx(); renderCard(); $('wrapOut').textContent='New call. Tap Wrap at the end.'; $('copyWrap').disabled=true; $('saveWrap').disabled=true; $('saveWrap').textContent='Save to Drive'; showAsk('Nothing yet.','','',false); };
 })();
 </script>
 <script>

@@ -181,6 +181,49 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail });
   await s9.pg.waitForTimeout(1000);
   check('Explain button: answers the last question', s9.bodies.length === before10 + 1 && /ROOM EXPLAIN/.test(await s9.pg.textContent('#roomA')) && /yellow ones/.test(await s9.pg.textContent('#roomQ')), await s9.pg.textContent('#roomQ'));
   check('Room questions: no page errors', s8.errs.length === 0 && s9.errs.length === 0, s8.errs.concat(s9.errs));
+
+  // Scenario 11 (5 Nov 2026, sk03): model ids with a "/" go to OpenRouter with no-retention routing; Claude is not called.
+  const orPage = async (orHandler) => {
+    const pg = await b.newPage();
+    const errs = []; pg.on('pageerror', e => errs.push(e.message)); pg.on('dialog', d => d.accept());
+    const orBodies = [], anBodies = [];
+    await pg.route('https://openrouter.ai/**', async r => { const body = JSON.parse(r.request().postData() || '{}'); orBodies.push(body); await r.fulfill(orHandler(orBodies.length, body)); });
+    await pg.route('https://api.anthropic.com/**', async r => { anBodies.push(JSON.parse(r.request().postData() || '{}')); await r.fulfill(reply('CLAUDE WRAP', 'end_turn')); });
+    await pg.addInitScript(() => { localStorage.setItem('sidekick_live', JSON.stringify({ apikey: 'x', orkey: 'k', gcid: 'y', gfolder: 'z', names: 'Harsh', mFast: 'openai/fast', mSmart: 'openai/smart', cap: 200 })); });
+    await pg.goto('file://' + harness);
+    await pg.evaluate(c => window.postMessage({ sk: 'cap1', caps: c }, '*'), [{ id: 'o1', author: 'Colleague, Test', text: 'openrouter test line' }]);
+    await pg.waitForTimeout(300);
+    return { pg, errs, orBodies, anBodies };
+  };
+  const orReply = (text, fin) => ({ status: 200, contentType: 'application/json', body: JSON.stringify({ model: 'openai/smart', choices: [{ finish_reason: fin, message: { role: 'assistant', content: text } }], usage: { prompt_tokens: 1000, completion_tokens: 5 } }) });
+  const s11 = await orPage(() => orReply('OR WRAP', 'stop'));
+  await s11.pg.click('#wrapBtn');
+  await s11.pg.waitForTimeout(1200);
+  const w11 = s11.orBodies.find(x => x.model === 'openai/smart');
+  check('OpenRouter: wrap answered by the "/" model', (await s11.pg.textContent('#wrapOut')).trim() === 'OR WRAP' && !!w11, s11.orBodies.map(x => x.model));
+  check('OpenRouter: no-retention routing sent on every call', s11.orBodies.length > 0 && s11.orBodies.every(x => x.provider && x.provider.data_collection === 'deny'), s11.orBodies.map(x => x.provider));
+  check('OpenRouter: Claude not called', s11.anBodies.length === 0, s11.anBodies.length);
+  check('OpenRouter: usage shown on the pill', /OpenRouter \d+k in/.test(await s11.pg.textContent('#aiPill')), await s11.pg.textContent('#aiPill'));
+
+  // Scenario 12: OpenRouter cut short once -> retried with more room.
+  const s12 = await orPage((n) => n === 1 ? orReply('PART', 'length') : orReply('FULL OR WRAP', 'stop'));
+  await s12.pg.click('#wrapBtn');
+  await s12.pg.waitForTimeout(1500);
+  check('OpenRouter cut short: retried with more room', s12.orBodies.length >= 2 && s12.orBodies[1].max_tokens > s12.orBodies[0].max_tokens && (await s12.pg.textContent('#wrapOut')).trim() === 'FULL OR WRAP', s12.orBodies.map(x => x.max_tokens));
+
+  // Scenario 13: OpenRouter keeps failing -> after 2 failures the call switches to the Claude fallback model; New call resets.
+  const s13 = await orPage(() => ({ status: 503, contentType: 'application/json', body: JSON.stringify({ error: { message: 'no providers' } }) }));
+  await s13.pg.click('#wrapBtn');
+  await s13.pg.waitForTimeout(4500);
+  const pill13 = await s13.pg.textContent('#aiPill');
+  check('OpenRouter down: wrap still answered by Claude', (await s13.pg.textContent('#wrapOut')).trim() === 'CLAUDE WRAP', await s13.pg.textContent('#wrapOut'));
+  check('OpenRouter down: fallback is the Claude answer model', s13.anBodies.length >= 1 && s13.anBodies.every(x => x.model === 'claude-sonnet-5-5'), s13.anBodies.map(x => x.model));
+  check('OpenRouter down: at most 2 OpenRouter tries before switching', s13.orBodies.length <= 2, s13.orBodies.length);
+  check('OpenRouter down: shown on the pill', /OpenRouter down/.test(pill13), pill13);
+  await s13.pg.click('#newCall');
+  await s13.pg.waitForTimeout(200);
+  check('OpenRouter down: New call goes back to OpenRouter', !/OpenRouter down/.test(await s13.pg.textContent('#aiPill')), await s13.pg.textContent('#aiPill'));
+  check('OpenRouter: no page errors', s11.errs.length === 0 && s12.errs.length === 0 && s13.errs.length === 0, s11.errs.concat(s12.errs, s13.errs));
   await b.close();
 
   let failed = 0;

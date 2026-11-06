@@ -28,6 +28,9 @@ Anthropic API are mocked, nothing leaves the machine), then checks:
 | The tracker rule (never invent status, owners, dates or decisions) is still in the rules, with platform mode as a labelled exception | general knowledge leaking into tracker answers |
 | Ordinary chatter on a big call makes no AI call | cost and noise from the new trigger |
 | "Explain the last question" answers the latest question even when the trigger missed it | missed questions with no way to ask |
+| Model id with a "/" goes to OpenRouter, with no-retention routing, Claude not called | sk03 multi-model (5 Nov) |
+| OpenRouter reply cut short is retried with more room | truncated replies (3 Nov PBR pattern) |
+| OpenRouter fails twice: rest of the call uses the Claude fallback model, shown on the pill; New call resets | a hypercare call depending on a new provider (5 Nov) |
 
 Verified to fail on the pre-fix page (2 Nov checks: on 889510f, 8 API hits in 8 s and a duplicated caption)
 and earlier checks on the pre-fix page (commit 8d9a177: 4 wraps, 4 transcripts, old captions kept)

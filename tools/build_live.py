@@ -85,7 +85,9 @@ def load_items(src):
 # ---------- pack ----------
 def build_pack(items, static, today):
     """items = open/waiting, plus done items updated within 2 days (Pacific dates).
-    Parked items stay out. Each item keeps its last 5 log lines clipped to 460 chars.
+    Parked items stay out. Each item keeps its last 5 log lines clipped to 460 chars, plus
+    'now' = its newest log line (date + text, clipped to 700) as the item's CURRENT state (6 Nov 2026:
+    a cheaper model read an older log line as current and invented a status), and the court.
     Rows with group "Platform facts" are not items: their "facts" list (checked org facts,
     up to 240, 400 chars each) goes into pack["platform"] for the Sidekick's room answers."""
     rows = []
@@ -114,6 +116,7 @@ def build_pack(items, static, today):
             'chase': d.get('chase') or '',
             'group': d.get('group') or '',
             'done_when': d.get('quality') or '',
+            'now': ({'d': log[-1].get('d', ''), 't': clip(log[-1].get('t'), 700)} if log else {}),
             'log': [{'d': l.get('d', ''), 't': clip(l.get('t'), 460)} for l in log[-5:]],
         })
     return {

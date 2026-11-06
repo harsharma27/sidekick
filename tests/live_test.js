@@ -166,6 +166,7 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail });
   check('Room question: no "Asked of you" alert', (await s8.pg.textContent('#askWho')) === ask8, await s8.pg.textContent('#askWho'));
   const sys8 = s8.bodies.length ? JSON.parse(s8.bodies[0]).system[0].text : '';
   check('Tracker rule unchanged: never invent status, owners, dates or decisions', /Never invent status, owners, dates or decisions/.test(sys8) && /PLATFORM MODE only/.test(sys8), sys8.slice(0, 80));
+  check('Current-state rule: "now" and "court" win over older log lines', /"now" field/.test(sys8) && /win over any older log line/.test(sys8), sys8.slice(0, 80));
 
   // Scenario 9: ordinary chatter on a big call -> no AI call at all.
   const s9 = await mkRoom();

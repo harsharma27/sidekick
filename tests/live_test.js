@@ -240,6 +240,33 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail });
   await s14.waitForTimeout(4500);
   check('Same id in both boxes: wrap falls back to the answer model (Sonnet), not Haiku', an14.length >= 1 && an14.every(x => x.model === 'claude-sonnet-5-5') && (await s14.textContent('#wrapOut')).trim() === 'CLAUDE WRAP', an14.map(x => x.model));
   check('Same id in both boxes: no page errors', errs14.length === 0, errs14);
+
+  // Scenario 15 (6 Nov 2026 follow-up call): the same ask repeated by Pawan and Pratyush within 2 minutes
+  // -> one gate check per 15 s using the newest line, one answer, one alert marked "asked again".
+  const s15 = await b.newPage();
+  const errs15 = []; s15.on('pageerror', e => errs15.push(e.message));
+  let gates15 = 0, answers15 = 0;
+  await s15.route('https://api.anthropic.com/**', async r => {
+    const body = r.request().postData() || '';
+    if (/Is Harsh being asked a question/.test(body)) { gates15++; return r.fulfill(reply('{"for_me": true, "kind": "question", "ask": "can CM and FS do the work order component placement together"}', 'end_turn')); }
+    if (/Give him what to say now/.test(body)) { answers15++; return r.fulfill(reply('{"say": "SAY ONE"}', 'end_turn')); }
+    return r.fulfill(reply('{"for_me": false}', 'end_turn'));
+  });
+  await s15.addInitScript(() => { localStorage.setItem('sidekick_live', JSON.stringify({ apikey: 'x', gcid: 'y', gfolder: 'z', names: 'Harsh', mFast: 'f', mSmart: 's', cap: 200 })); });
+  await s15.goto('file://' + harness);
+  const rep15 = [
+    { id: 'd1', author: 'Mangoli, Pawan', text: 'Harsh, can we coordinate and do the work order placement together?' },
+    { id: 'd2', author: 'Mangoli, Pawan', text: 'Or is it OK for us to place that component on the work order, Harsh?' },
+    { id: 'd3', author: 'Sahu, Pratyush', text: 'Harsh, what is your thought on doing the placement together?' },
+  ];
+  for (const c of rep15) { await s15.evaluate(x => window.postMessage({ sk: 'cap1', caps: [x] }, '*'), c); await s15.waitForTimeout(1200); }
+  await s15.waitForTimeout(22000);
+  const list15 = await s15.textContent('#alertList');
+  const n15 = (list15.match(/Say: /g) || []).length;
+  check('Repeated ask: at most 2 gate checks for 3 lines in 4 s', gates15 >= 1 && gates15 <= 2, gates15);
+  check('Repeated ask: one answer call', answers15 === 1, answers15);
+  check('Repeated ask: one alert, marked asked again', n15 === 1 && /Asked 2 times/.test(list15), list15.slice(0, 300));
+  check('Repeated ask: no page errors', errs15.length === 0, errs15);
   await b.close();
 
   let failed = 0;

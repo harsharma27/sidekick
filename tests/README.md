@@ -33,6 +33,7 @@ Anthropic API are mocked, nothing leaves the machine), then checks:
 | OpenRouter fails twice: rest of the call uses the Claude fallback model, shown on the pill; New call resets | a hypercare call depending on a new provider (5 Nov) |
 | Same OpenRouter id in both boxes: the wrap falls back to the answer model, not the fast one | openrouter/auto in both boxes (6 Nov DSM) |
 | The rules tell the model each item's "now" and "court" are its current state | a cheaper model invented a status from an older log line (6 Nov brief test) |
+| The same ask repeated within 2 minutes gives one gate check per 15 s, one answer and one alert marked "asked again" | 6 alerts in 2 min with conflicting say-lines (6 Nov follow-up call) |
 
 ## build_live_test.py (pack builder)
 

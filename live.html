@@ -327,7 +327,7 @@ function liveContext(n){
 }
 
 // ---------- triggers ----------
-var lastNameAt=0, lastAlertAt=0;
+var lastNameAt=0, lastAlertAt=0, gateTimer=null, gateNext=null;
 function mentionsMe(text){ var t=' '+norm(text)+' '; return myNames().some(function(n){ return n && t.indexOf(' '+n+' ')>-1; }); }
 function mentionsStory(text){ var hit=null; (text||'').replace(/(\d{3,6})/g,function(_,n){ if(!hit&&storyDigits[n]) hit='CMCM-'+n; return _; }); return hit; }
 var lastMeAt=0;
@@ -342,10 +342,32 @@ function checkLine(L){
  if(!why && /\?\s*$/.test(L.text) && Date.now()-lastNameAt<30000) why='a question after your name';
  if(!why && REQ.test(L.text) && L.text.length>25 && (smallCall() || Date.now()-lastMeAt<180000)) why='a request';
  if(!why){ if(isRoomQ(L.text)) roomAnswer(L,false); return; }
- var wait=15000-(Date.now()-lastAlertAt);
- if(wait>0){ setTimeout(function(){ lastAlertAt=Date.now(); gateThenAnswer(L,why); }, wait+200); lastAlertAt=Date.now()+wait; return; }
- lastAlertAt=Date.now();
- gateThenAnswer(L,why);
+ // One gate check at most every 15 s. Lines that trigger while one is waiting replace it, so the check
+ // reads the newest line instead of queueing one check per line (6 Nov 2026: 6 alerts in 2 min for one ask).
+ gateNext={L:L,why:why};
+ if(gateTimer) return;
+ var wait=Math.max(0,15000-(Date.now()-lastAlertAt));
+ gateTimer=setTimeout(function(){ gateTimer=null; var n=gateNext; gateNext=null; if(!n) return; lastAlertAt=Date.now(); gateThenAnswer(n.L,n.why); }, wait?wait+200:0);
+}
+// Same ask again within 3 minutes (same story number, same asker, or mostly the same words) updates the
+// existing alert instead of adding a new one with a different say-line.
+var DUP_MS=180000, answering=null;
+var STOPW={what:1,that:1,this:1,with:1,have:1,will:1,would:1,could:1,should:1,there:1,their:1,about:1,from:1,your:1,they:1,them:1,just:1,also:1,whether:1,harsh:1,team:1,teams:1};
+function words(s){ var o={}; ((s||'').toLowerCase().match(/[a-z0-9]{4,}/g)||[]).forEach(function(w){ if(!STOPW[w]) o[w]=1; }); return o; }
+function keys(s){ return ((s||'').match(/\d{5}/g)||[]); }
+function sameTopic(a,b){
+ var ka=keys(a.ask+' '+(a.quote||'')), kb=keys(b.ask+' '+(b.quote||''));
+ if(ka.length&&kb.length) return ka.some(function(k){ return kb.indexOf(k)>=0; });
+ var wa=words(a.ask), wb=words(b.ask), inter=0, uni={};
+ Object.keys(wa).forEach(function(w){ uni[w]=1; if(wb[w]) inter++; }); Object.keys(wb).forEach(function(w){ uni[w]=1; });
+ var n=Object.keys(uni).length, j=n?inter/n:0;
+ return j>=0.4 || (a.from&&a.from===b.from&&j>=0.2);
+}
+function findDup(c){
+ var now=Date.now();
+ if(answering && now-answering.t<DUP_MS && sameTopic(c,answering)) return answering;
+ for(var i=alertLog.length-1;i>=0;i--){ var a=alertLog[i]; if(a.kind==='own') continue; if(now-(a.lastT||a.t)>DUP_MS) break; if(sameTopic(c,a)) return a; }
+ return null;
 }
 
 // ---------- room questions ----------
@@ -464,7 +486,11 @@ function gateThenAnswer(L,why){
  claudeAs('fast',q,400).then(function(t){
   var g=parseJSON(t);
   if(!g||!g.for_me){ showAsk('Heard '+why+' from '+(L.author||'someone')+' at '+clock(L.t)+'. Not a question for you.','','"'+L.text+'"',false); return; }
-  answer(g.ask||L.text, L.author, g.kind);
+  var cand={ask:g.ask||L.text, from:L.author||'', quote:L.text};
+  var dup=findDup(cand);
+  if(dup){ dup.again=(dup.again||1)+1; dup.lastT=Date.now(); dup.lastFrom=L.author||''; renderAlerts();
+   showAsk((L.author||'Someone')+' asked again: '+dup.ask, dup.say||'Still working on the first answer...', 'Same ask as the '+clock(dup.t)+' alert ('+dup.again+' times). If it has changed, tap "I\'ve been asked" for a fresh answer.', true); return; }
+  answer(g.ask||L.text, L.author, g.kind, null, L.text);
  }).catch(function(e){ showAsk('Heard '+why+' at '+clock(L.t)+', but the AI check failed.','','"'+L.text+'"',true); banner('AI: '+e.message); });
 }
 var alertLog=[];
@@ -474,20 +500,24 @@ function renderAlerts(){
  if(!alertLog.length){ box.textContent='None yet. Each alert stays here after the next one arrives.'; return; }
  alertLog.slice().reverse().forEach(function(a){
   var d=el('div','res'); var h=el('div'); h.appendChild(el('b',null,clock(a.t)+'  '+(a.from?a.from+': ':'')+a.ask)); d.appendChild(h);
+  if(a.again) d.appendChild(el('div','muted','Asked '+a.again+' times, last '+clock(a.lastT)+(a.lastFrom?' by '+a.lastFrom:'')));
   if(a.say) d.appendChild(el('div',null,'Say: '+a.say));
   if(a.capture) d.appendChild(el('div','muted','To do: '+a.capture));
   box.appendChild(d);
  });
 }
-function answer(ask,from,kind,quote){
+function answer(ask,from,kind,quote,trigger){
+ answering={t:Date.now(),from:from||'',ask:ask,quote:quote||trigger||'',kind:kind||'question',say:''};
  showAsk((from?from+' asked: ':'Asked: ')+ask,'Thinking...','',true);
  var q=liveContext(80)+'\n\nWhat Harsh is being asked'+(from?' (by '+from+')':'')+': '+ask+(quote?'\nExact caption: "'+quote+'"':'')+'\n\nGive him what to say now, answering THIS question in the context of the conversation above. Use the pack only for facts about his items; do not bring in prepared call-sheet points. Rules for the reply: say = what he says out loud now, at most 2 short sentences and 35 words, answering only what was asked'+(kind==='action'?'. This is a request or task for him: say = a short, polite acknowledgement he can say now (agree to look at it or send it, never promise a date he has not been given), and capture = the to-do in under 12 words':', nothing about his own to-dos or internal follow-ups unless asked')+'. source = item ids and dates only, e.g. "g24 23 Oct; call" (no commentary). if_pushed = one sentence. Reply with JSON only: {"say": "...", "capture": "...", "source": "...", "if_pushed": "..."}';
  var t0=Date.now();
  claudeAs('smart',q,1000).then(function(t){
   var a=parseJSON(t); if(!a||!a.say) a={say:t};
   showAsk((from?from+(kind==='action'?' asked you to: ':' asked: '):'Asked: ')+ask,a.say||'',(a.capture?'To do: '+a.capture+'\n':'')+(a.source?'Source: '+a.source:'')+(a.if_pushed?'\nIf pushed: '+a.if_pushed:'')+'\n('+Math.round((Date.now()-t0)/1000)+' s)',true);
-  logAlert({t:Date.now(),from:from||'',ask:ask,kind:kind||'question',say:a.say||'',capture:a.capture||''});
- }).catch(function(e){ showAsk('Asked: '+ask,'','The AI answer failed: '+e.message,true); banner('AI: '+e.message); });
+  var rec={t:answering?answering.t:Date.now(),from:from||'',ask:ask,quote:quote||trigger||'',kind:kind||'question',say:a.say||'',capture:a.capture||''};
+  if(answering&&answering.again){ rec.again=answering.again; rec.lastT=answering.lastT; rec.lastFrom=answering.lastFrom; }
+  answering=null; logAlert(rec);
+ }).catch(function(e){ answering=null; showAsk('Asked: '+ask,'','The AI answer failed: '+e.message,true); banner('AI: '+e.message); });
 }
 $('askedBtn').onclick=function(){
  if(!lines.length){ banner('No captions yet. Click the bookmark on the Teams tab.'); return; }
@@ -662,7 +692,7 @@ function saveNow(rewrapped){
  if(driveLive()) go(); else connectDrive(go);
 }
 $('saveWrap').onclick=function(){ saveNow(false); };
-$('newCall').onclick=function(){ if(lines.length && !confirm('Clear this call\'s captions and people?')) return; orDown=false; orFail=0; renderUsage(); oldSig={}; lines.forEach(function(L){ oldSig[sig(L.author,L.text)]=1; }); savedWrap=null; saving=false; lines=[]; byKey={}; cur={}; callSum=''; sumAt=0; sumLines=0; heardPeople={}; chosen={}; alertLog=[]; renderAlerts(); wrapText=''; wrapLines=0; renderTx(); renderCard(); $('wrapOut').textContent='New call. Tap Wrap at the end.'; $('copyWrap').disabled=true; $('saveWrap').disabled=true; $('saveWrap').textContent='Save to Drive'; showAsk('Nothing yet.','','',false); };
+$('newCall').onclick=function(){ if(lines.length && !confirm('Clear this call\'s captions and people?')) return; orDown=false; orFail=0; renderUsage(); oldSig={}; lines.forEach(function(L){ oldSig[sig(L.author,L.text)]=1; }); savedWrap=null; saving=false; lines=[]; byKey={}; cur={}; callSum=''; sumAt=0; sumLines=0; heardPeople={}; chosen={}; alertLog=[]; answering=null; gateNext=null; if(gateTimer){ clearTimeout(gateTimer); gateTimer=null; } renderAlerts(); wrapText=''; wrapLines=0; renderTx(); renderCard(); $('wrapOut').textContent='New call. Tap Wrap at the end.'; $('copyWrap').disabled=true; $('saveWrap').disabled=true; $('saveWrap').textContent='Save to Drive'; showAsk('Nothing yet.','','',false); };
 })();
 </script>
 <script>

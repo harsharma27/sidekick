@@ -150,7 +150,7 @@ a.bm{display:inline-block;padding:7px 12px;border-radius:8px;background:var(--ch
 
 <script type="text/plain" id="bmsrc">
 (function(){
- var SK='https://harsharma27.github.io/sidekick/live.html', ORIGIN='https://harsharma27.github.io', V=11;
+ var SK='https://harsharma27.github.io/sidekick/live.html', ORIGIN='https://harsharma27.github.io', V=12;
  if(window.__skcap){ try{ if(window.__skcap.v===V&&window.__skcap.w&&!window.__skcap.w.closed){ window.__skcap.w.focus(); return; } }catch(e){} clearInterval(window.__skcap.t); try{ window.__skcap.wk.terminate(); }catch(e){} try{ window.__skcap.mo.disconnect(); }catch(e){} window.__skcap=null; }
  var w=window.open(SK,'sidekick_live');
  if(!w){ alert('Sidekick: allow pop-ups for this site, then click the bookmark again.'); return; }
@@ -175,7 +175,7 @@ a.bm{display:inline-block;padding:7px 12px;border-radius:8px;background:var(--ch
   if(w.closed){ stop(); return; }
   lastSend=Date.now();
   var wr=wrapper(), caps=wr?items(wr):[];
-  try{ w.postMessage({sk:'cap1',v:V,title:document.title,at:Date.now(),mode:wr?'structured':'none',caps:caps.slice(-12)},ORIGIN); }catch(e){}
+  try{ w.postMessage({sk:'cap1',v:V,title:document.title,at:Date.now(),mode:wr?'structured':'none',hidden:document.hidden,caps:caps.slice(-12)},ORIGIN); }catch(e){}
  }
  function stop(){ try{ st.wk.terminate(); }catch(e){} try{ st.mo.disconnect(); }catch(e){} clearInterval(st.t); window.__skcap=null; }
  try{ st.mo=new MutationObserver(function(){ if(Date.now()-lastSend>300) send(); }); st.mo.observe(document.body,{subtree:true,childList:true,characterData:true}); }catch(e){}
@@ -278,7 +278,7 @@ function isMe(author){ var a=norm(author); return a==='sharma harsh'||a==='harsh
 window.addEventListener('message',function(ev){
  if(!OK.test(ev.origin)) return;
  var m=ev.data; if(!m||m.sk!=='cap1') return;
- lastMsg=Date.now();
+ lastMsg=Date.now(); noteTeamsView(m);
  (m.caps||[]).forEach(function(c){
   if(!cur[c.id] && oldSig[sig(c.author,c.text)]) return; // caption still on the Teams screen from before New call
   if(!cur[c.id]){ var sg=sig(c.author,c.text), rec=lines.slice(-30); for(var i=rec.length-1;i>=0;i--){ if(sig(rec[i].author,rec[i].text)===sg){ cur[c.id]=rec[i].key; return; } } } // Teams re-sent a caption under a new id
@@ -296,11 +296,29 @@ function renderTx(){
 }
 function transcript(n){ return lines.slice(-(n||40)).map(function(L){ return '['+clock(L.t)+'] '+(L.author||'?')+': '+L.text; }).join('\n'); }
 
+// Capture health (6 Nov 2026): Chrome stops drawing a hidden or covered Teams tab, so its caption list
+// stalls and lines are lost (3-4 min gaps on the 5 Nov PBR and 6 Nov DSM). Bookmark v12+ reports
+// document.hidden; warn while Teams is hidden and record the spans in the saved transcript.
+var capV=0, teamsHidden=false, hiddenSince=0, hiddenSpans=[], oldBmWarned=false;
+function noteTeamsView(m){
+ capV=m.v||0;
+ if(capV<12 && !oldBmWarned){ oldBmWarned=true; banner('Update the Sidekick bookmark (drag it to the bookmarks bar again) to get the "Teams hidden" warning.'); }
+ var h=(m.hidden===true);
+ if(h && !teamsHidden){ teamsHidden=true; hiddenSince=Date.now(); }
+ else if(!h && teamsHidden){ teamsHidden=false; hiddenSpans.push({from:hiddenSince,to:Date.now()}); }
+}
+function captureHealth(){
+ var spans=hiddenSpans.slice(); if(teamsHidden) spans.push({from:hiddenSince,to:Date.now()});
+ var tot=spans.reduce(function(s,x){ return s+(x.to-x.from); },0), gaps=[];
+ for(var i=1;i<lines.length;i++){ var g=lines[i].t-lines[i-1].t; if(g>60000) gaps.push(clock(lines[i-1].t)+'-'+clock(lines[i].t)); }
+ return '--- capture health: bookmark v'+(capV||'?')+(capV<12?' (old: no hidden-Teams report)':'')+'; Teams hidden '+spans.length+' time(s), '+Math.round(tot/60000)+' min total'+(spans.length?' ('+spans.map(function(x){ return clock(x.from)+'-'+clock(x.to); }).join(', ')+')':'')+'; caption gaps over 60 s: '+(gaps.length?gaps.join(', '):'none');
+}
 // a line is settled when Teams stops changing it for 2.5 s
 function tick(){
  var age=lastMsg?Math.round((Date.now()-lastMsg)/1000):-1;
  var p=$('capPill');
  if(age<0){ p.textContent='Captions: waiting for the bookmark'; p.className='pill warn'; }
+ else if(age<5 && teamsHidden){ var hs=Math.round((Date.now()-hiddenSince)/1000); p.textContent='Captions: Teams hidden '+hs+' s, keep the Teams tab visible'; p.className='pill bad'; }
  else if(age<5){ p.textContent='Captions: live'; p.className='pill ok'; }
  else { p.textContent='Captions: no update '+age+' s'; p.className='pill bad'; }
  var now=Date.now();
@@ -687,12 +705,12 @@ function saveNow(rewrapped){
  if(!rewrapped && lines.length>wrapLines){ saving=true; $('saveWrap').disabled=true; $('saveWrap').textContent='Re-wrapping...'; banner('New captions since the wrap ('+(lines.length-wrapLines)+' lines). Re-wrapping once before saving...'); doWrap(function(){ banner(''); saving=false; saveNow(true); }); return; }
  saving=true; $('saveWrap').disabled=true; $('saveWrap').textContent='Saving...';
  var d=new Date(), stamp=d.getFullYear()+pad(d.getMonth()+1)+pad(d.getDate())+'-'+pad(d.getHours())+pad(d.getMinutes());
- var full=lines.map(function(L){ return '['+clock(L.t)+'] '+(L.author||'?')+': '+L.text; }).join('\n'), w=wrapText;
+ var full=lines.map(function(L){ return '['+clock(L.t)+'] '+(L.author||'?')+': '+L.text; }).join('\n')+'\n'+captureHealth(), w=wrapText;
  function go(){ driveSave('wrap-'+stamp+'.txt',w).then(function(){ return driveSave('transcript-'+stamp+'.txt',full); }).then(function(){ savedWrap=w; saving=false; $('saveWrap').textContent='Saved'; }).catch(function(e){ saving=false; $('saveWrap').disabled=false; $('saveWrap').textContent='Save to Drive'; banner('Not saved: '+e.message); }); }
  if(driveLive()) go(); else connectDrive(go);
 }
 $('saveWrap').onclick=function(){ saveNow(false); };
-$('newCall').onclick=function(){ if(lines.length && !confirm('Clear this call\'s captions and people?')) return; orDown=false; orFail=0; renderUsage(); oldSig={}; lines.forEach(function(L){ oldSig[sig(L.author,L.text)]=1; }); savedWrap=null; saving=false; lines=[]; byKey={}; cur={}; callSum=''; sumAt=0; sumLines=0; heardPeople={}; chosen={}; alertLog=[]; answering=null; gateNext=null; if(gateTimer){ clearTimeout(gateTimer); gateTimer=null; } renderAlerts(); wrapText=''; wrapLines=0; renderTx(); renderCard(); $('wrapOut').textContent='New call. Tap Wrap at the end.'; $('copyWrap').disabled=true; $('saveWrap').disabled=true; $('saveWrap').textContent='Save to Drive'; showAsk('Nothing yet.','','',false); };
+$('newCall').onclick=function(){ if(lines.length && !confirm('Clear this call\'s captions and people?')) return; orDown=false; orFail=0; renderUsage(); oldSig={}; lines.forEach(function(L){ oldSig[sig(L.author,L.text)]=1; }); savedWrap=null; saving=false; lines=[]; byKey={}; cur={}; callSum=''; sumAt=0; sumLines=0; heardPeople={}; chosen={}; hiddenSpans=[]; if(teamsHidden) hiddenSince=Date.now(); alertLog=[]; answering=null; gateNext=null; if(gateTimer){ clearTimeout(gateTimer); gateTimer=null; } renderAlerts(); wrapText=''; wrapLines=0; renderTx(); renderCard(); $('wrapOut').textContent='New call. Tap Wrap at the end.'; $('copyWrap').disabled=true; $('saveWrap').disabled=true; $('saveWrap').textContent='Save to Drive'; showAsk('Nothing yet.','','',false); };
 })();
 </script>
 <script>

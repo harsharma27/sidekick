@@ -34,6 +34,7 @@ Anthropic API are mocked, nothing leaves the machine), then checks:
 | Same OpenRouter id in both boxes: the wrap falls back to the answer model, not the fast one | openrouter/auto in both boxes (6 Nov DSM) |
 | The rules tell the model each item's "now" and "court" are its current state | a cheaper model invented a status from an older log line (6 Nov brief test) |
 | The same ask repeated within 2 minutes gives one gate check per 15 s, one answer and one alert marked "asked again" | 6 alerts in 2 min with conflicting say-lines (6 Nov follow-up call) |
+| Bookmark v12 reports a hidden Teams tab: pill warns, transcript ends with a capture-health line; an old bookmark gets an update note | 3-4 min caption gaps when Teams was in a background tab (5 Nov PBR, 6 Nov DSM) |
 
 ## build_live_test.py (pack builder)
 

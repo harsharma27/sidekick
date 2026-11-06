@@ -12,7 +12,7 @@ let html = fs.readFileSync(SRC, 'utf8');
 // Each patch must match exactly once, or the test fails loudly (the page changed shape: update the patch).
 const patches = [
   ['function driveSave(name,text){',
-   "function driveSave(name,text){ window.__saves=(window.__saves||[]); window.__saves.push(name); return new Promise(function(r){setTimeout(r,300)});"],
+   "function driveSave(name,text){ window.__saves=(window.__saves||[]); window.__saves.push(name); (window.__saveTexts=window.__saveTexts||{})[name]=text; return new Promise(function(r){setTimeout(r,300)});"],
   [' if(!OK.test(ev.origin)) return;', ' '],
   [' if(driveLive()) go(); else connectDrive(go);', ' go();'],
 ];
@@ -267,6 +267,35 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail });
   check('Repeated ask: one answer call', answers15 === 1, answers15);
   check('Repeated ask: one alert, marked asked again', n15 === 1 && /Asked 2 times/.test(list15), list15.slice(0, 300));
   check('Repeated ask: no page errors', errs15.length === 0, errs15);
+
+  // Scenario 16 (6 Nov 2026): the bookmark reports the Teams tab hidden -> warning on the pill, and the
+  // saved transcript ends with a capture-health line naming the hidden span; an old bookmark gets a note.
+  const s16 = await b.newPage();
+  const errs16 = []; s16.on('pageerror', e => errs16.push(e.message)); s16.on('dialog', d => d.accept());
+  await s16.route('https://api.anthropic.com/**', r => r.fulfill(reply('WRAP16', 'end_turn')));
+  await s16.addInitScript(() => { localStorage.setItem('sidekick_live', JSON.stringify({ apikey: 'x', gcid: 'y', gfolder: 'z', names: 'Harsh', mFast: 'f', mSmart: 's', cap: 200 })); });
+  await s16.goto('file://' + harness);
+  const msg16 = (hidden, caps) => s16.evaluate(m => window.postMessage(m, '*'), { sk: 'cap1', v: 12, hidden, caps });
+  await msg16(false, [{ id: 'h1', author: 'Colleague, Test', text: 'first line while Teams is visible' }]);
+  await s16.waitForTimeout(600);
+  for (let i = 0; i < 4; i++) { await msg16(true, [{ id: 'h1', author: 'Colleague, Test', text: 'first line while Teams is visible' }]); await s16.waitForTimeout(700); }
+  const pill16 = await s16.textContent('#capPill');
+  await msg16(false, [{ id: 'h2', author: 'Colleague, Test', text: 'second line after Teams is visible again' }]);
+  await s16.waitForTimeout(1200);
+  const pill16b = await s16.textContent('#capPill');
+  await s16.click('#wrapBtn'); await s16.waitForTimeout(800);
+  await s16.evaluate(() => document.getElementById('saveWrap').click()); await s16.waitForTimeout(900);
+  const tx16 = await s16.evaluate(() => { const o = window.__saveTexts || {}; const k = Object.keys(o).find(n => /transcript/.test(n)); return k ? o[k] : ''; });
+  check('Teams hidden: pill warns to keep Teams visible', /Teams hidden \d+ s/.test(pill16), pill16);
+  check('Teams visible again: pill back to live', /Captions: live/.test(pill16b), pill16b);
+  check('Saved transcript ends with capture health naming the hidden span', /capture health: bookmark v12; Teams hidden 1 time\(s\)/.test(tx16), tx16.slice(-200));
+  const s16b = await b.newPage(); const errs16b = []; s16b.on('pageerror', e => errs16b.push(e.message));
+  await s16b.addInitScript(() => { localStorage.setItem('sidekick_live', JSON.stringify({ apikey: 'x', gcid: 'y', gfolder: 'z', names: 'Harsh', mFast: 'f', mSmart: 's', cap: 200 })); });
+  await s16b.goto('file://' + harness);
+  await s16b.evaluate(m => window.postMessage(m, '*'), { sk: 'cap1', v: 11, caps: [{ id: 'o1', author: 'A, B', text: 'old bookmark line' }] });
+  await s16b.waitForTimeout(400);
+  check('Old bookmark: note to update it', /Update the Sidekick bookmark/.test(await s16b.textContent('#banner')), await s16b.textContent('#banner'));
+  check('Capture health: no page errors', errs16.length === 0 && errs16b.length === 0, errs16.concat(errs16b));
   await b.close();
 
   let failed = 0;

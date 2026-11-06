@@ -320,7 +320,7 @@ function maybeSummarize(force){
  if(!lines.length) return;
  sumBusy=true;
  var q='Full caption transcript so far (newest last; captions can mishear words):\n'+transcript(400)+'\n\nSummarise the call so far for Harsh, who is listening. Plain text, under 180 words, these labels:\nTOPIC NOW: what is being discussed in the last few minutes (story numbers if said).\nEARLIER: topics already covered, one line each.\nDECISIONS: agreed outcomes, who owns them.\nASKED OF HARSH: anything put to Harsh by name or to the group he is part of, with who asked and roughly when; "none" if none.\nOPEN QUESTIONS: questions raised and not answered yet, with who asked.\nUse only what the captions say; mark unclear parts (as heard).';
- claude(S.mFast,q,700,{noSheet:true}).then(function(t){ callSum=t; sumAt=Date.now(); sumLines=lines.length; var b=$('sumBox'); if(b) b.textContent=t; }).catch(function(e){ logErr('summary: '+e.message); sumAt=Date.now(); sumLines=lines.length; }).then(function(){ sumBusy=false; });
+ claudeAs('fast',q,700,{noSheet:true}).then(function(t){ callSum=t; sumAt=Date.now(); sumLines=lines.length; var b=$('sumBox'); if(b) b.textContent=t; }).catch(function(e){ logErr('summary: '+e.message); sumAt=Date.now(); sumLines=lines.length; }).then(function(){ sumBusy=false; });
 }
 function liveContext(n){
  return (callSum?'CALL SO FAR (running summary, may lag a few minutes):\n'+callSum+'\n\n':'')+'Recent captions (newest last):\n'+(lines.length?transcript(n||80):'(no captions yet)');
@@ -358,7 +358,7 @@ function roomAnswer(L,manual){
  lastRoomAt=Date.now();
  $('roomQ').textContent=(L.author||'Someone')+' at '+clock(L.t)+': "'+L.text+'"'; $('roomA').textContent='Thinking...'; $('roomSay').textContent='';
  var q='PLATFORM MODE.\nRecent captions (newest last):\n'+transcript(30)+'\n\nThe question to the room: '+(L.author||'?')+': '+L.text+'\n\nIf this is a question about how Salesforce or ServiceMax works (configuration, fields, picklists, layouts, permissions, flows, components, reports), explain it so Harsh can chip in: explain = at most 3 short plain sentences on how it works, using pack "platform" facts first and saying "general Salesforce" for anything else; say = one short sentence he could say, in his voice; check = what to verify in QA, a few words; confidence = high, medium or low. If it is not that kind of question, set relevant to false. Reply with JSON only: {"relevant": true|false, "explain": "...", "say": "...", "check": "...", "confidence": "..."}';
- claude(S.mSmart,q,1200).then(function(t){
+ claudeAs('smart',q,1200).then(function(t){
   var a=parseJSON(t);
   if(!a||!a.relevant){ if(manual){ $('roomA').textContent='Not a how-it-works question as far as the captions show.'; } else { $('roomQ').textContent='Open questions to the room about how Salesforce or ServiceMax works show up here, with a short explanation.'; $('roomA').textContent=''; } return; }
   $('roomA').textContent=(a.explain||'')+(a.check?'\nCheck in QA: '+a.check:'')+(a.confidence?'\n(Confidence: '+a.confidence+')':'');
@@ -429,7 +429,10 @@ function orOnce(model,userText,maxTok,tmo,opts){
   },netErr(timer));
 }
 function viaOR(model){ return /\//.test(model||'') && !orDown; }
-function fallbackModel(model){ return model===S.mFast?FB_FAST:FB_SMART; }
+// Fallback by ROLE, not by model id (6 Nov 2026): with the same id in both boxes (e.g. openrouter/auto),
+// answer and wrap calls must still fall back to the answer model, not the fast one.
+function fallbackModel(model,opts){ var role=opts&&opts.role; if(role) return role==='fast'?FB_FAST:FB_SMART; return model===S.mFast?FB_FAST:FB_SMART; }
+function claudeAs(role,userText,maxTok,opts){ return claude(role==='fast'?S.mFast:S.mSmart,userText,maxTok,Object.assign({},opts||{},{role:role})); }
 // retries: more room when the reply ran out of tokens, and a short wait on rate limit, overload, network error or timeout
 function claude(model,userText,maxTok,opts){
  if(viaOR(model) && !S.orkey) return Promise.reject(new Error('Model '+model+' needs the OpenRouter key in settings.'));
@@ -440,10 +443,10 @@ function claude(model,userText,maxTok,opts){
  var tok=Math.max(maxTok||0,2000), tmo=tok>=4000?180000:90000, tries=0;
  function attempt(){
   tries++;
-  var or=viaOR(model), m=or?model:(/\//.test(model)?fallbackModel(model):model);
+  var or=viaOR(model), m=or?model:(/\//.test(model)?fallbackModel(model,opts):model);
   return (or?orOnce:claudeOnce)(m,userText,tok,tmo,opts).then(function(t){ failRun=0; if(or) orFail=0; banner(''); return t; },function(e){
    logErr('try '+tries+': '+e.message);
-   if(or && !e.moreTokens){ orFail++; if(orFail>=2){ orDown=true; orFail=0; logErr('OpenRouter failed twice in a row: using '+fallbackModel(model)+' for the rest of this call'); banner('OpenRouter is failing: switched to Claude for the rest of this call.'); renderUsage(); if(S.apikey){ tries=0; return attempt(); } } } usage.fails=(usage.fails||0)+1; try{ localStorage.setItem(KEY+'_usage',JSON.stringify(usage)); }catch(x){}
+   if(or && !e.moreTokens){ orFail++; if(orFail>=2){ orDown=true; orFail=0; logErr('OpenRouter failed twice in a row: using '+fallbackModel(model,opts)+' for the rest of this call'); banner('OpenRouter is failing: switched to Claude for the rest of this call.'); renderUsage(); if(S.apikey){ tries=0; return attempt(); } } } usage.fails=(usage.fails||0)+1; try{ localStorage.setItem(KEY+'_usage',JSON.stringify(usage)); }catch(x){}
    if(tries<3 && e.moreTokens){ tok=Math.min(tok*3,16000); banner('AI reply was cut short, retrying with more room...'); return attempt(); }
    if(e.partial){ banner('AI reply still cut short after retries; showing what came back.'); return e.partial+'\n\n(Cut short: the reply hit the length limit.)'; }
    if(tries<3 && e.retry){ var wait=tries===1?2000:6000; banner('AI busy ('+e.message+'), retrying in '+(wait/1000)+' s...'); return new Promise(function(res){ setTimeout(res,wait); }).then(attempt); }
@@ -458,7 +461,7 @@ function showAsk(who,say,more,hot){ $('askWho').textContent=who; $('askSay').tex
 function gateThenAnswer(L,why){
  showAsk('Heard '+why+' from '+(L.author||'someone')+' at '+clock(L.t)+': "'+L.text+'". Checking...','','',true);
  var q='Recent captions (newest last):\n'+transcript(25)+'\n\nThe line that triggered this: '+(L.author||'?')+': '+L.text+'\n\nIs Harsh being asked a question, or asked or expected to do something (send, share, confirm, follow up, check), or about to be assigned or assumed to own something, right now? A request aimed at the whole group including him counts. Reply with JSON only: {"for_me": true|false, "kind": "question"|"action", "ask": "<what is being asked of him, in a few words, or empty>"}';
- claude(S.mFast,q,400).then(function(t){
+ claudeAs('fast',q,400).then(function(t){
   var g=parseJSON(t);
   if(!g||!g.for_me){ showAsk('Heard '+why+' from '+(L.author||'someone')+' at '+clock(L.t)+'. Not a question for you.','','"'+L.text+'"',false); return; }
   answer(g.ask||L.text, L.author, g.kind);
@@ -480,7 +483,7 @@ function answer(ask,from,kind,quote){
  showAsk((from?from+' asked: ':'Asked: ')+ask,'Thinking...','',true);
  var q=liveContext(80)+'\n\nWhat Harsh is being asked'+(from?' (by '+from+')':'')+': '+ask+(quote?'\nExact caption: "'+quote+'"':'')+'\n\nGive him what to say now, answering THIS question in the context of the conversation above. Use the pack only for facts about his items; do not bring in prepared call-sheet points. Rules for the reply: say = what he says out loud now, at most 2 short sentences and 35 words, answering only what was asked'+(kind==='action'?'. This is a request or task for him: say = a short, polite acknowledgement he can say now (agree to look at it or send it, never promise a date he has not been given), and capture = the to-do in under 12 words':', nothing about his own to-dos or internal follow-ups unless asked')+'. source = item ids and dates only, e.g. "g24 23 Oct; call" (no commentary). if_pushed = one sentence. Reply with JSON only: {"say": "...", "capture": "...", "source": "...", "if_pushed": "..."}';
  var t0=Date.now();
- claude(S.mSmart,q,1000).then(function(t){
+ claudeAs('smart',q,1000).then(function(t){
   var a=parseJSON(t); if(!a||!a.say) a={say:t};
   showAsk((from?from+(kind==='action'?' asked you to: ':' asked: '):'Asked: ')+ask,a.say||'',(a.capture?'To do: '+a.capture+'\n':'')+(a.source?'Source: '+a.source:'')+(a.if_pushed?'\nIf pushed: '+a.if_pushed:'')+'\n('+Math.round((Date.now()-t0)/1000)+' s)',true);
   logAlert({t:Date.now(),from:from||'',ask:ask,kind:kind||'question',say:a.say||'',capture:a.capture||''});
@@ -490,7 +493,7 @@ $('askedBtn').onclick=function(){
  if(!lines.length){ banner('No captions yet. Click the bookmark on the Teams tab.'); return; }
  showAsk('Finding what you were just asked...','Thinking...','',true);
  var q=liveContext(80)+'\n\nHarsh just tapped "I have been asked". Find the most recent question or request put to Harsh (by name, as "you" right after he spoke, or to the group he is in). Reply with JSON only: {"found": true|false, "asker": "<speaker name>", "quote": "<the caption line(s), verbatim>", "ask": "<what is being asked of him, in plain words>", "kind": "question"|"action"}. If nothing was put to him in the last few minutes, found=false.';
- claude(S.mFast,q,500,{noSheet:true}).then(function(t){
+ claudeAs('fast',q,500,{noSheet:true}).then(function(t){
   var g=parseJSON(t);
   if(!g||!g.found){ showAsk('No question to you found in the last few minutes.','','Type what was asked in "What should I say?" and tap it, or tap again once it is in the captions.',false); return; }
   answer(g.ask||g.quote,g.asker,g.kind,g.quote);
@@ -501,7 +504,7 @@ function sayFor(topic){
  showAsk('You want to raise: '+topic,'Thinking...','',true);
  var q=liveContext(80)+'\n\nHarsh wants to bring up this himself, nobody asked: '+topic+'\n\nGive him what to say now. say = what he says out loud, at most 2 short sentences and 35 words, plain and polite, only facts in the pack or the call. If the pack does not cover it, say so and give a safe line that asks rather than states. source = item ids and dates only. if_pushed = one sentence. Reply with JSON only: {"say": "...", "source": "...", "if_pushed": "..."}';
  var t0=Date.now();
- claude(S.mSmart,q,800).then(function(t){
+ claudeAs('smart',q,800).then(function(t){
   var a=parseJSON(t); if(!a||!a.say) a={say:t};
   showAsk('You want to raise: '+topic,a.say||'',(a.source?'Source: '+a.source:'')+(a.if_pushed?'\nIf pushed: '+a.if_pushed:'')+'\n('+Math.round((Date.now()-t0)/1000)+' s)',true);
   logAlert({t:Date.now(),from:'',ask:'You raised: '+topic,kind:'own',say:a.say||'',capture:''});
@@ -511,7 +514,7 @@ function suggestPoint(){
  showAsk('Looking for a point worth raising...','Thinking...','',true);
  var q=liveContext(80)+'\n\nNobody asked Harsh anything. Propose at most 2 points worth Harsh raising RIGHT NOW, and only if they connect to TOPIC NOW or the last few minutes of captions: e.g. the discussion touches a story or item in his pack and he holds a fact, an open question, a waiting-on, or a decision that affects his stories; or someone on the call owes him something on that topic. Do NOT suggest prepared call-sheet points or anything unrelated to what is being discussed. Skip anything already said. For each: say = one or two short spoken sentences (max 35 words), why = what in the current discussion it connects to (under 12 words), source = item ids and dates only. Most of the time the right answer is an empty list. Reply with JSON only: {"points":[{"say":"...","why":"...","source":"..."}]}';
  var t0=Date.now();
- claude(S.mSmart,q,1000,{noSheet:true}).then(function(t){
+ claudeAs('smart',q,1000,{noSheet:true}).then(function(t){
   var a=parseJSON(t), pts=(a&&a.points)||[];
   if(!pts.length){ showAsk('Nothing worth raising right now.','','('+Math.round((Date.now()-t0)/1000)+' s)',false); return; }
   showAsk('Possible points to raise',pts.map(function(p,i){ return (i+1)+'. '+p.say; }).join('\n'),pts.map(function(p,i){ return (i+1)+'. '+(p.why||'')+(p.source?' ['+p.source+']':''); }).join('\n')+'\n('+Math.round((Date.now()-t0)/1000)+' s)',true);
@@ -632,7 +635,7 @@ $('briefBtn').onclick=function(){
  var picked=PACK?(PACK.people||[]).filter(function(p){return chosen[p.name]}).map(function(p){return p.name}):[];
  $('brief').textContent='Thinking...';
  var q='People on this call: '+(picked.join(', ')||'unknown')+'.\nCaptions so far:\n'+(transcript(30)||'(none yet)')+'\n\nWrite Harsh a call card in plain text, at most 8 short lines: for each person, what they are waiting on from Harsh and what he is waiting on from them, with his one-line status in his voice; then up to 2 likely questions with answers. Cite tracker item ids. No preamble.';
- claude(S.mSmart,q,1500).then(function(t){ $('brief').textContent=t; }).catch(function(e){ $('brief').textContent='Brief failed: '+e.message; });
+ claudeAs('smart',q,1500).then(function(t){ $('brief').textContent=t; }).catch(function(e){ $('brief').textContent='Brief failed: '+e.message; });
 };
 
 // ---------- wrap ----------
@@ -643,7 +646,7 @@ function doWrap(after){
  var full=lines.map(function(L){ return '['+clock(L.t)+'] '+(L.author||'?')+': '+L.text; }).join('\n');
  var q='Full caption transcript of the call (speaker names from Teams, words can be misheard):\n'+full.slice(-120000)+'\n\nWrite the wrap for Harsh only. Sections, each a short list, "None" when empty:\n1. Asked of Harsh (who asked, what, quote the caption)\n2. What Harsh said he would do (only his own lines, as said)\n3. Decisions that affect his work\n4. Follow-ups to send (to whom, one line each)\n5. Tracker updates to propose (tracker item id, the new log line)\nUse only what the captions say. Keep names, story numbers and dates as said; mark anything unclear (as heard).';
  wrapLines=lines.length;
- claude(S.mSmart,q,4000).then(function(t){ wrapText=t; $('wrapOut').textContent=t; $('copyWrap').disabled=false; $('saveWrap').disabled=false; $('saveWrap').textContent='Save to Drive'; if(after) after(); }).catch(function(e){ $('wrapOut').textContent='Wrap failed: '+e.message; saving=false; $('saveWrap').disabled=!wrapText; $('saveWrap').textContent='Save to Drive'; });
+ claudeAs('smart',q,4000).then(function(t){ wrapText=t; $('wrapOut').textContent=t; $('copyWrap').disabled=false; $('saveWrap').disabled=false; $('saveWrap').textContent='Save to Drive'; if(after) after(); }).catch(function(e){ $('wrapOut').textContent='Wrap failed: '+e.message; saving=false; $('saveWrap').disabled=!wrapText; $('saveWrap').textContent='Save to Drive'; });
 }
 $('wrapBtn').onclick=function(){ doWrap(); };
 $('copyWrap').onclick=function(){ if(navigator.clipboard) navigator.clipboard.writeText(wrapText).then(function(){ $('copyWrap').textContent='Copied'; setTimeout(function(){ $('copyWrap').textContent='Copy'; },2000); }); };

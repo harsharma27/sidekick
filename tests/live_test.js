@@ -224,6 +224,21 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail });
   await s13.pg.waitForTimeout(200);
   check('OpenRouter down: New call goes back to OpenRouter', !/OpenRouter down/.test(await s13.pg.textContent('#aiPill')), await s13.pg.textContent('#aiPill'));
   check('OpenRouter: no page errors', s11.errs.length === 0 && s12.errs.length === 0 && s13.errs.length === 0, s11.errs.concat(s12.errs, s13.errs));
+
+  // Scenario 14 (6 Nov 2026): the same OpenRouter id in both boxes (openrouter/auto) -> the wrap still falls back to the answer model.
+  const s14 = await b.newPage();
+  const errs14 = []; s14.on('pageerror', e => errs14.push(e.message)); s14.on('dialog', d => d.accept());
+  const an14 = [];
+  await s14.route('https://openrouter.ai/**', r => r.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ error: { message: 'no providers' } }) }));
+  await s14.route('https://api.anthropic.com/**', async r => { an14.push(JSON.parse(r.request().postData() || '{}')); await r.fulfill(reply('CLAUDE WRAP', 'end_turn')); });
+  await s14.addInitScript(() => { localStorage.setItem('sidekick_live', JSON.stringify({ apikey: 'x', orkey: 'k', gcid: 'y', gfolder: 'z', names: 'Harsh', mFast: 'openrouter/auto', mSmart: 'openrouter/auto', cap: 200 })); });
+  await s14.goto('file://' + harness);
+  await s14.evaluate(c => window.postMessage({ sk: 'cap1', caps: c }, '*'), [{ id: 'a1', author: 'Colleague, Test', text: 'auto router test line' }]);
+  await s14.waitForTimeout(300);
+  await s14.click('#wrapBtn');
+  await s14.waitForTimeout(4500);
+  check('Same id in both boxes: wrap falls back to the answer model (Sonnet), not Haiku', an14.length >= 1 && an14.every(x => x.model === 'claude-sonnet-5-5') && (await s14.textContent('#wrapOut')).trim() === 'CLAUDE WRAP', an14.map(x => x.model));
+  check('Same id in both boxes: no page errors', errs14.length === 0, errs14);
   await b.close();
 
   let failed = 0;

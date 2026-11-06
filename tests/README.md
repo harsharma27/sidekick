@@ -31,6 +31,7 @@ Anthropic API are mocked, nothing leaves the machine), then checks:
 | Model id with a "/" goes to OpenRouter, with no-retention routing, Claude not called | sk03 multi-model (5 Nov) |
 | OpenRouter reply cut short is retried with more room | truncated replies (3 Nov PBR pattern) |
 | OpenRouter fails twice: rest of the call uses the Claude fallback model, shown on the pill; New call resets | a hypercare call depending on a new provider (5 Nov) |
+| Same OpenRouter id in both boxes: the wrap falls back to the answer model, not the fast one | openrouter/auto in both boxes (6 Nov DSM) |
 
 Verified to fail on the pre-fix page (2 Nov checks: on 889510f, 8 API hits in 8 s and a duplicated caption)
 and earlier checks on the pre-fix page (commit 8d9a177: 4 wraps, 4 transcripts, old captions kept)

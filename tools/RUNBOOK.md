@@ -94,7 +94,7 @@ the error, and confirmation that nothing after it was written.
 
 ## Notes
 
-- Pacific time is `America/Los_Angeles`. TODAY = open or waiting items whose due or chase
+- BC time is `America/Vancouver` (permanent UTC-7; `America/Los_Angeles` is an hour behind in winter). TODAY = open or waiting items whose due or chase
   date is today or earlier; TOMORROW = next weekday; WAITING ON OTHERS = court is not Harsh
   and no date soon; DONE TODAY = status done and updated today (Pacific). Parked items are left out.
 - Pack items = open and waiting items, plus done items updated in the last 2 days, each with the

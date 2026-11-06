@@ -31,7 +31,7 @@ Subcommands
 import base64, datetime, glob, hashlib, json, os, sys
 from zoneinfo import ZoneInfo
 
-PT = ZoneInfo('America/Los_Angeles')
+PT = ZoneInfo('America/Vancouver')  # BC is on permanent UTC-7; Los_Angeles is an hour behind from Nov 2026
 HEAD = 'CURRENT STATE'
 LIVE = 'LIVE LIST,'
 STOP = 'UPDATE about'

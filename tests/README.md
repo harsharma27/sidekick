@@ -60,3 +60,21 @@ Synthetic exports only. Checks that a cut-off Jira CSV (a row shorter than the h
 with exit 2, writes no workbook and reports no DROPPED stories (4 Nov 2026: a cut-off all-fields export
 would have shown CMCM-48928, CMCM-49795 and CMCM-49957 as dropped), and that a story that really left
 the epic is still reported with where it went. 6 of 7 checks fail on the pre-fix script.
+
+## lane_static_test.py and lane_test.js (work lane, 9 Nov 2026)
+
+Run both before every commit that touches `live.html` or `routing.json`:
+
+```
+python3 -I tests/lane_static_test.py
+node tests/lane_test.js        # needs playwright; the gate, Anthropic and Drive are mocked
+```
+
+`lane_static_test.py` (no browser): the `innerHTML` count stays 0 and there is no other HTML sink; the CSP meta exists and `connect-src` lists only the gate, Anthropic, Drive, Google sign-in, OpenRouter and this site;
+the page calls `GATE+'/v1/chat/completions'` in OpenAI format and never `/v1/messages`; `routing.json` equals the copy built into the page and uses only `work-fallback` (detection) and `work-sonnet` (answers, wrap);
+no key-shaped string anywhere in the repo.
+
+`lane_test.js` (browser): direct is the default and never touches the gate; the lane request shape, key, streaming and `routing.json` limits; SSE chunks split mid-line; every `refused:` shape is shown as
+"blocked by the work-lane rule" or "switched off" and never retried or sent anywhere else; network error, 502, 504, 5xx without `refused:` and no first byte by the deadline fall back to direct for the
+rest of the meeting with a banner, and the fallback count goes out as `x-sk-fallbacks` on the next door call; a break after the first byte, a gate 429, 401 and 403 do NOT fall back; the toggle, the hub key
+field, the health probe, test mode (synthetic captions, Drive blocked) and a real CSP block. A mutation (fall back on refusals too) makes 13 checks fail.

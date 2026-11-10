@@ -56,7 +56,7 @@ a.bm{display:inline-block;padding:7px 12px;border-radius:8px;background:var(--ch
 #laneBar.bad{background:var(--bad);color:#fff}
 #tabBar{display:none;background:var(--bad);color:#fff;padding:8px 12px;border-radius:10px;margin-bottom:10px;font-weight:600}
 #resumeBar{display:none;background:var(--hot);border:1px solid var(--warn);color:var(--fg);padding:8px 12px;border-radius:10px;margin-bottom:10px;font-weight:600}
-#saveAsk{display:none;gap:8px;align-items:center;flex-wrap:wrap;margin-top:8px;padding:8px;border:1px solid var(--warn);border-radius:10px;background:var(--hot)}
+#saveAsk,#restoreBar,#clearAsk{display:none;gap:8px;align-items:center;flex-wrap:wrap;margin-top:8px;padding:8px;border:1px solid var(--warn);border-radius:10px;background:var(--hot)}
 </style>
 </head>
 <body>
@@ -64,6 +64,7 @@ a.bm{display:inline-block;padding:7px 12px;border-radius:8px;background:var(--ch
 <header>
  <h1>Sidekick Live</h1>
  <span class="pill" id="capPill">Captions: waiting. Click inside the Teams side, then click the Sidekick bookmark</span>
+ <span class="pill" id="txPill" title="Tap to sign in to Drive again or retry the transcript save" style="cursor:pointer">Transcript: no captions yet</span>
  <span class="pill" id="packPill">Pack: not loaded</span>
  <button id="packBtn" class="packbtn" title="Reload the context pack and call sheets from Drive">Load pack from Drive</button>
  <span class="pill" id="aiPill">AI: 0 calls today</span>
@@ -74,6 +75,7 @@ a.bm{display:inline-block;padding:7px 12px;border-radius:8px;background:var(--ch
 <div id="banner"></div>
 <div id="tabBar" role="alert"></div>
 <div id="resumeBar" role="status"></div>
+<div id="restoreBar" role="group" aria-label="Unsaved call in this browser"><span id="restoreBarTxt"></span><button type="button" id="restoreNow" class="primary">1. Restore it (recommended)</button><button type="button" id="restoreSave">2. Save to Drive and clear</button><button type="button" id="restoreDrop">3. Discard</button></div>
 <div id="tabNote" class="muted"></div>
 <div id="laneBar" role="status"></div><button id="retryHub" type="button" style="display:none;margin:0 0 10px">Retry hub</button>
 <div id="testBar" role="status"></div>
@@ -131,7 +133,8 @@ a.bm{display:inline-block;padding:7px 12px;border-radius:8px;background:var(--ch
 
 <div class="card">
  <h2>Wrap</h2>
- <div class="row"><button id="wrapBtn">Wrap this call</button><button id="copyWrap" disabled>Copy</button><button id="saveWrap" disabled>Save to Drive</button><button id="newCall">New call</button></div>
+ <div class="row"><button id="wrapBtn">Wrap this call</button><button id="copyWrap" disabled>Copy</button><button id="saveWrap" disabled>Save to Drive</button><button id="newCall">New call</button><button id="restorePrev" type="button" style="display:none">Restore previous call</button></div>
+ <div id="clearAsk" role="group" aria-label="The call is not saved to Drive"><span id="clearAskTxt"></span><button type="button" id="clearReconnect" class="primary">1. Reconnect Drive and save (recommended)</button><button type="button" id="clearDownload">2. Download a copy</button><button type="button" id="clearAnyway">3. Clear anyway</button><button type="button" id="clearCancel">4. Cancel</button></div>
  <div id="saveAsk" role="group" aria-label="New lines since the wrap"><span>The wrap is older than the last captions.</span><button type="button" id="saveAsIs" class="primary">1. Save as is</button><button type="button" id="saveRewrap">2. Re-wrap then save</button></div>
  <pre id="wrapOut" style="margin-top:8px" class="muted">After the call, tap Wrap: what was asked of you, what you committed to, decisions, follow-ups and tracker updates.</pre>
 </div>
@@ -241,16 +244,16 @@ function norm(s){ return (s||'').toLowerCase().replace(/[^a-z0-9 ]/g,' ').replac
 function el(tag,cls,text){ var e=document.createElement(tag); if(cls) e.className=cls; if(text!=null) e.textContent=text; return e; }
 
 // ---------- context pack ----------
-var PACK=null, packAt=0;
+var PACK=null, packAt=0, PK={where:'',checked:0,hubChecked:null,empty:false,err:'',packTok:'',callsTok:'',callsData:null,busy:false,lastPoll:0};   // PK: pack freshness state (see packPoll)
 function setPack(p,where){
  if(!p||!p.items){ banner('That file is not a Sidekick pack.'); return; }
- PACK=p; packAt=Date.now();
+ PACK=p; packAt=Date.now(); PK.where=where; mt.packVer=p.built||'';
  $('packBtn').classList.remove('need');
- $('packPill').textContent='Pack: '+p.items.length+' items, built '+localBuilt(p.built)+' ('+where+')'; $('packPill').className='pill ok';
+ renderPackPill();
  try{ localStorage.setItem(KEY+'_pack',JSON.stringify(p)); }catch(e){}
  storyDigits=collectDigits(); renderCard(); runLookup(); renderCall();
 }
-try{ var cached=JSON.parse(localStorage.getItem(KEY+'_pack')||'null'); if(cached){ PACK=cached; $('packPill').textContent='Pack: '+cached.items.length+' items, built '+localBuilt(cached.built)+' (saved copy)'; $('packPill').className='pill warn'; $('packBtn').classList.add('need'); } }catch(e){}
+try{ var cached=JSON.parse(localStorage.getItem(KEY+'_pack')||'null'); if(cached){ PACK=cached; PK.where='saved copy'; $('packBtn').classList.add('need'); } }catch(e){}
 if(!PACK) $('packBtn').classList.add('need');
 $('packFile').onchange=function(){ var f=this.files[0]; if(!f) return; f.text().then(function(t){ try{ setPack(JSON.parse(t),'file'); }catch(e){ banner('Could not read that file as JSON.'); } }); };
 var storyDigits=collectDigits();
@@ -263,41 +266,109 @@ function collectDigits(){
 }
 
 // ---------- Drive ----------
-var gToken=null, gExp=0, gClient=null;
+var gToken=null, gExp=0, gClient=null, signins=0, gErr='';
+var DRV='https://www.googleapis.com/drive/v3/files', DUP='https://www.googleapis.com/upload/drive/v3/files';
 function driveLive(){ return gToken && Date.now()<gExp; }
-function loadGIS(cb){ if(window.google&&google.accounts&&google.accounts.oauth2) return cb(); var sc=document.createElement('script'); sc.src='https://accounts.google.com/gsi/client'; sc.onload=cb; sc.onerror=function(){ banner('Could not load Google sign-in.'); }; document.head.appendChild(sc); }
+function u8len(s){ try{ return new TextEncoder().encode(s).length; }catch(e){ return unescape(encodeURIComponent(s)).length; } }
+function loadGIS(cb,fail){ if(window.google&&google.accounts&&google.accounts.oauth2) return cb(); var sc=document.createElement('script'); sc.src='https://accounts.google.com/gsi/client'; sc.onload=cb; sc.onerror=function(){ gErr='Google sign-in script did not load'; banner('Could not load Google sign-in.'); if(fail) fail(); }; document.head.appendChild(sc); }
+// Sign-in (11 Nov 2026): requestAccessToken is only ever called from inside his tap (the Transcript pill, Wrap, Save, New call, the Drive buttons), never by a timer.
 function connectDrive(then){
  saveSettings();
  if(TESTMODE){ banner('Test mode: nothing is saved to Drive.'); return; }
  if(!S.gcid){ banner('Add the Google client ID in settings first.'); return; }
  loadGIS(function(){
-  if(!gClient) gClient=google.accounts.oauth2.initTokenClient({client_id:S.gcid,scope:'https://www.googleapis.com/auth/drive.readonly https://www.googleapis.com/auth/drive.file',callback:function(r){ if(r&&r.access_token){ gToken=r.access_token; gExp=Date.now()+((r.expires_in||3600)-60)*1000; banner(''); if(gClient._then){ var f=gClient._then; gClient._then=null; f(); } } else banner('Drive sign-in failed.'); }});
+  if(!gClient) gClient=google.accounts.oauth2.initTokenClient({client_id:S.gcid,scope:'https://www.googleapis.com/auth/drive.readonly https://www.googleapis.com/auth/drive.file',
+   callback:function(r){ if(r&&r.access_token){ gToken=r.access_token; gExp=Date.now()+((r.expires_in||3600)-60)*1000; gErr=''; if(++signins>1) mt.renewals++; banner(''); var f=gClient._then; gClient._then=null; storeSignedIn(); if(f) f(); } else { gErr='sign-in failed'; gClient._then=null; banner('Drive sign-in failed.'); } },
+   error_callback:function(er){ gClient._then=null; var ty=er&&er.type; gErr=ty==='popup_failed_to_open'?'the sign-in pop-up was blocked':ty==='popup_closed'?'the sign-in pop-up was closed':'sign-in failed'; banner('Drive sign-in: '+gErr+'. Tap the Transcript pill to try again.'); }});
   gClient._then=then; gClient.requestAccessToken({prompt:''});
+ },function(){ if(then&&gClient) gClient._then=null; });
+}
+// One Drive request with its own deadline. Rejects with an Error that has .status (an HTTP answer), .retryAfter, .timeout, or neither (the network failed or the body was cut).
+function dreq(url,opts,tmoMs){
+ return new Promise(function(resolve,reject){
+  if(TESTMODE){ var e0=new Error('Test mode: nothing is saved to Drive.'); e0.testMode=true; reject(e0); return; }
+  opts=opts||{}; var ctl=new AbortController(), done=false;
+  function fin(er,val){ if(done) return; done=true; clearTimeout(tm); if(er) reject(er); else resolve(val); }
+  var tm=setTimeout(function(){ if(done) return; try{ ctl.abort(); }catch(e){} var te=new Error('no answer within '+Math.round(tmoMs/1000)+' s'); te.timeout=true; fin(te); },tmoMs);
+  opts.signal=ctl.signal; opts.headers=Object.assign({Authorization:'Bearer '+gToken},opts.headers||{});
+  fetch(url,opts).then(function(r){
+   if(!r.ok){ var he=new Error('Drive HTTP '+r.status); he.status=r.status; he.retryAfter=parseInt(r.headers&&r.headers.get&&r.headers.get('retry-after'),10)||0; fin(he); return; }
+   r.text().then(function(tx){ fin(null,{status:r.status,text:tx}); },function(){ fin(Object.assign(new Error('the reply was cut off'),{cut:true})); });
+  },function(){ fin(new Error('network error')); });
  });
 }
-function gfetch(url,opts){ if(TESTMODE) return Promise.reject(new Error('Test mode: nothing is saved to Drive.')); opts=opts||{}; opts.headers=Object.assign({Authorization:'Bearer '+gToken},opts.headers||{}); return fetch(url,opts).then(function(r){ if(!r.ok) throw new Error('Drive HTTP '+r.status); return r; }); }
-function loadCallsFromDrive(){
- var q=encodeURIComponent("'"+S.gfolder+"' in parents and name contains 'sidekick-calls' and trashed=false&orderBy=createdTime desc".split('&')[0]);
- return gfetch('https://www.googleapis.com/drive/v3/files?q='+q+'&orderBy=createdTime%20desc&fields=files(id,name)')
-  .then(function(r){return r.json()}).then(function(j){ var f=j.files&&j.files[0]; if(!f) return null; return gfetch('https://www.googleapis.com/drive/v3/files/'+f.id+'?alt=media').then(function(r){return r.json()}); })
-  .then(function(c){ if(c&&c.calls&&PACK){ PACK.calls=c.calls; PACK.callsBuilt=c.built||''; try{ localStorage.setItem(KEY+'_pack',JSON.stringify(PACK)); }catch(e){} callId=''; renderCall(); $('setStatus').textContent='Pack and '+c.calls.length+' call sheets loaded (call sheets built '+localBuilt(PACK.callsBuilt)+').'; } })
-  .catch(function(e){ banner('Call sheets not loaded: '+e.message); });
+function djson(r){ try{ return JSON.parse(r.text); }catch(e){ throw new Error('Drive sent a reply that is not JSON'); } }
+// Pack freshness (11 Nov 2026): ONE Drive list call every routing.pack.poll_ms; the pack and the call sheets are downloaded only when their checksum changes.
+function applyCalls(c){
+ if(!(c&&c.calls&&PACK)) return;
+ PACK.calls=c.calls; PACK.callsBuilt=c.built||''; try{ localStorage.setItem(KEY+'_pack',JSON.stringify(PACK)); }catch(e){}
+ if(!c.calls.some(function(x){ return x.id===callId; })) callId='';   // keep the chosen call sheet while it still exists
+ renderCall(); $('setStatus').textContent='Pack and '+c.calls.length+' call sheets loaded (call sheets built '+localBuilt(PACK.callsBuilt)+').';
 }
-function loadPackFromDrive(){
- if(!S.gfolder){ banner('Add the Drive folder ID in settings.'); return; }
- var q=encodeURIComponent("'"+S.gfolder+"' in parents and name contains 'sidekick-pack' and trashed=false");
- gfetch('https://www.googleapis.com/drive/v3/files?q='+q+'&orderBy=createdTime%20desc&pageSize=1&fields=files(id,name,createdTime)')
-  .then(function(r){return r.json()}).then(function(j){ var f=j.files&&j.files[0]; if(!f) throw new Error('no sidekick-pack file in the folder'); return gfetch('https://www.googleapis.com/drive/v3/files/'+f.id+'?alt=media'); })
-  .then(function(r){return r.json()}).then(function(p){ setPack(p,'Drive'); $('setStatus').textContent='Pack loaded from Drive.'; return loadCallsFromDrive(); })
-  .catch(function(e){ banner('Pack not loaded: '+e.message); });
+function parseHub(v){ if(v==null||String(v).trim()==='') return null; var n=Number(v); if(isFinite(n)) return n<1e11?n*1000:n; var d=Date.parse(v); return isNaN(d)?null:d; }
+function packPoll(manual){
+ if(TESTMODE||PK.busy) return Promise.resolve();
+ if(!S.gfolder){ if(manual) banner('Add the Drive folder ID in settings.'); return Promise.resolve(); }
+ if(!driveLive()) return Promise.resolve();
+ PK.busy=true; PK.lastPoll=Date.now();
+ var q=encodeURIComponent("'"+S.gfolder+"' in parents and trashed=false and (name='sidekick-pack.json' or name contains 'sidekick-calls')"), tmo=stc('request_timeout_s')*1000, swapped=false;
+ return dreq(DRV+'?q='+q+'&orderBy=modifiedTime%20desc&pageSize=20&fields=files(id,name,modifiedTime,md5Checksum,properties)',{},tmo).then(function(r){
+  var files=djson(r).files||[], pf=files.filter(function(f){ return f.name==='sidekick-pack.json'; })[0], cf=files.filter(function(f){ return f.name.indexOf('sidekick-calls')>-1; })[0];
+  if(!pf){ var ee=new Error(files.length?'no sidekick-pack.json in the Drive folder':'the Drive folder has no pack files'); ee.empty=true; throw ee; }
+  PK.empty=false; PK.hubChecked=parseHub(pf.properties&&pf.properties.hub_checked);
+  var ptok=pf.md5Checksum||pf.modifiedTime||'', p0=Promise.resolve();
+  if(manual||ptok!==PK.packTok||!PACK||PK.where!=='Drive'){
+   p0=dreq(DRV+'/'+pf.id+'?alt=media',{},tmo).then(function(d){ var p; try{ p=JSON.parse(d.text); }catch(e){ p=null; } if(!p||!p.items) throw new Error('the pack download was not a valid pack (kept the current pack)'); setPack(p,'Drive'); PK.packTok=ptok; swapped=true; mt.swaps++; });
+  }
+  return p0.then(function(){
+   var ctok=cf?(cf.md5Checksum||cf.modifiedTime||''):'';
+   if(cf&&(manual||ctok!==PK.callsTok||(swapped&&!PK.callsData))) return dreq(DRV+'/'+cf.id+'?alt=media',{},tmo).then(function(d){ var c=djson(d); if(!(c&&c.calls)) throw new Error('the call sheets download was not valid'); PK.callsData=c; PK.callsTok=ctok; applyCalls(c); });
+   if(swapped&&PK.callsData) applyCalls(PK.callsData);
+  });
+ }).then(function(){ PK.checked=Date.now(); PK.err=''; mt.pkOk++; PK.busy=false; if(manual) $('setStatus').textContent='Pack loaded from Drive.'; renderPackPill(); },function(e){
+  PK.busy=false; mt.pkFail++; PK.err=e.message; if(e.empty) PK.empty=true;
+  if(e.status===401){ gToken=null; gErr='Drive sign-in ended'; }
+  if(manual) banner('Pack not loaded: '+e.message); renderPackPill();
+ });
 }
+function loadPackFromDrive(){ return packPoll(true); }
 $('driveBtn').onclick=function(){ connectDrive(loadPackFromDrive); };
-setInterval(function(){ if(driveLive()&&S.gfolder) loadPackFromDrive(); },600000); // keep pack and call sheets fresh during the day
 $('packBtn').onclick=function(){ connectDrive(loadPackFromDrive); };
+function packTick(now){ if(TESTMODE) return; if(now-PK.lastPoll>=pkc('poll_ms')) packPoll(false); }
+function bcWeekday(t){ try{ return new Date(t).toLocaleDateString('en-US',{timeZone:'America/Vancouver',weekday:'short'}); }catch(e){ return ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][new Date(t).getDay()]; } }
+function hubHours(t){ var wd=bcWeekday(t), h=parseInt(bcParts(t).hour,10); return wd!=='Sat'&&wd!=='Sun'&&h>=7&&h<=18; }   // the hub publishes weekdays 07:00-18:59 BC time
+function renderPackPill(){
+ var p=$('packPill'), now=Date.now();
+ if(!PACK){ p.textContent='Pack: not loaded'; p.className='pill'; return; }
+ var base='Pack: '+PACK.items.length+' items, built '+localBuilt(PACK.built), cls='ok', msg='', stale=pkc('stale_min')*60000, hubOn=hubHours(now);
+ function ago(t){ return bcTime(t)+', '+Math.round((now-t)/60000)+' min ago'; }
+ if(PK.where!=='Drive'){ cls='bad'; msg=' ('+(PK.where||'saved copy')+'): not from Drive, so it may be old. Tap Load pack from Drive'; }
+ else if(PK.empty){ cls='bad'; msg=' (Drive): '+PK.err; }
+ else if(!PK.checked||now-PK.checked>stale){ cls='bad'; msg=' (Drive): last successful check '+(PK.checked?ago(PK.checked):'never')+', so it may be old'+(PK.err?' ('+PK.err+')':''); }
+ else if(hubOn&&PK.hubChecked!=null&&PK.hubChecked<=now+60000&&now-PK.hubChecked>stale){ cls='bad'; msg=' (Drive): the hub last checked '+ago(PK.hubChecked)+', so it may be old'; }
+ else if(hubOn&&(PK.hubChecked==null||PK.hubChecked>now+60000)){ cls='warn'; msg=' (Drive, checked '+bcTime(PK.checked)+'): hub heartbeat unknown'; }
+ else if(PK.err){ cls='warn'; msg=' (Drive, checked '+bcTime(PK.checked)+'): the latest check failed ('+PK.err+')'; }
+ else if(!hubOn){ cls=''; msg=' (Drive, checked '+bcTime(PK.checked)+'): hub publishes weekdays 07:00-18:59 BC time'; }
+ else msg=' (Drive, checked '+bcTime(PK.checked)+')';
+ p.textContent=base+msg; p.className='pill'+(cls?' '+cls:'');
+}
 function driveSave(name,text){
  var b='skb'+Date.now(), meta={name:name,parents:[S.gfolder],mimeType:'text/plain'};
  var body='--'+b+'\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n'+JSON.stringify(meta)+'\r\n--'+b+'\r\nContent-Type: text/plain; charset=UTF-8\r\n\r\n'+text+'\r\n--'+b+'--';
- return gfetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart',{method:'POST',headers:{'Content-Type':'multipart/related; boundary='+b},body:body});
+ return dreq(DUP+'?uploadType=multipart',{method:'POST',headers:{'Content-Type':'multipart/related; boundary='+b},body:body},stc('request_timeout_s')*1000);
+}
+// Transcript file calls (11 Nov 2026). The file is bound by its id only; the exact-name lookup is used only after a create whose answer was lost.
+function dfCreate(name,text,tmo){
+ var b='skb'+Date.now(), meta={name:name,parents:[S.gfolder],mimeType:'text/plain'};
+ var body='--'+b+'\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n'+JSON.stringify(meta)+'\r\n--'+b+'\r\nContent-Type: text/plain; charset=UTF-8\r\n\r\n'+text+'\r\n--'+b+'--';
+ return dreq(DUP+'?uploadType=multipart&fields=id,name,size',{method:'POST',headers:{'Content-Type':'multipart/related; boundary='+b},body:body},tmo).then(function(r){ var j=djson(r); if(!j.id) throw new Error('Drive sent no file id'); return {id:j.id,size:j.size==null?null:+j.size}; });
+}
+function dfPatch(id,text,tmo){
+ return dreq(DUP+'/'+encodeURIComponent(id)+'?uploadType=media&fields=id,size',{method:'PATCH',headers:{'Content-Type':'text/plain; charset=UTF-8'},body:text},tmo).then(function(r){ var j=djson(r); return {id:j.id||id,size:j.size==null?null:+j.size}; });
+}
+function dfFind(name,tmo){
+ var q=encodeURIComponent("'"+S.gfolder+"' in parents and name='"+name+"' and trashed=false");
+ return dreq(DRV+'?q='+q+'&orderBy=createdTime%20desc&pageSize=1&fields=files(id,name,size)',{},tmo).then(function(r){ var f=(djson(r).files||[])[0]; return f?{id:f.id,size:f.size==null?null:+f.size}:null; });
 }
 
 // ---------- captions ----------
@@ -352,7 +423,8 @@ function captureHealth(){
 // ---------- other Sidekick tabs (10 Nov 2026, fix 6) ----------
 // The bookmark opens a Sidekick tab with a unique window name per launch; a BroadcastChannel heartbeat (tab id, opened time, fed flag: never caption text) tells each tab about the others,
 // so captions going to a different tab are visible. The channel is shared by every page on this web address, so a message is checked for shape before use.
-var TABID=Math.random().toString(36).slice(2,8), TAB_OPENED=Date.now(), others={}, lastBeat=0, bc=null, pageStart=Date.now();
+var TABID=tabId(), TAB_OPENED=Date.now(), others={}, lastBeat=0, bc=null, pageStart=Date.now();
+function tabId(){ try{ var v=sessionStorage.getItem('sidekick_tabid'); if(v&&/^[a-z0-9]{6}$/.test(v)) return v; v=Math.random().toString(36).slice(2,8); while(v.length<6) v+='0'; sessionStorage.setItem('sidekick_tabid',v); return v; }catch(e){ return Math.random().toString(36).slice(2,8); } }   // kept for a reload of the same tab, so its own browser copy is recognised
 function fedNow(){ return !!lastMsg && Date.now()-lastMsg<15000; }
 try{ bc=new BroadcastChannel('sidekick_tabs'); bc.onmessage=function(ev){ var m=ev.data; if(!m||m.sk!=='tab1'||typeof m.id!=='string'||m.id===TABID) return; if(m.closing) delete others[m.id]; else others[m.id]={opened:+m.opened||0,fed:m.fed===true,seen:Date.now()}; renderTabs(); }; }catch(e){ bc=null; }
 function beat(){ if(!bc) return; try{ bc.postMessage({sk:'tab1',id:TABID,opened:TAB_OPENED,fed:fedNow()}); }catch(e){} }
@@ -382,6 +454,7 @@ function tick(){
  var now=Date.now();
  lines.forEach(function(L){ if(!L.checked && now-L.changed>2500){ L.checked=true; checkLine(L); } });
  maybeSummarize(false);
+ try{ storeTick(); packTick(nowT); renderPackPill(); }catch(e){ logErr('store: '+e.message); }
 }
 // a Worker timer is not slowed down when this window is in the background
 var tickWorker=null;
@@ -492,8 +565,8 @@ function renderUsage(){ var paused=Date.now()<pausedUntil; $('aiPill').textConte
 renderUsage();
 var errLog=[];
 // Per-meeting counters for the call-health footer (10 Nov 2026, fix 4). Counts, times, models, tokens, cost and error classes only: never caption text.
-var PAGE_V='2026-11-10.3';
-function newMeeting(){ return {start:Date.now(),calls:{},ok:0,fail:0,retries:0,cutRetries:0,stops:0,models:{},groups:{},cost:0,costKnown:0,noPrice:false,errs:[],tabsMax:1}; }
+var PAGE_V='2026-11-11.1';
+function newMeeting(){ return {start:Date.now(),calls:{},ok:0,fail:0,retries:0,cutRetries:0,stops:0,models:{},groups:{},cost:0,costKnown:0,noPrice:false,errs:[],tabsMax:1,asOk:0,asFail:0,gapMax:0,renewals:0,pkOk:0,pkFail:0,swaps:0,packVer:(PACK&&PACK.built)||''}; }
 var mt=newMeeting();
 function logErr(m){ errLog.push(clock(Date.now())+'  '+m); mt.errs.push(clock(Date.now())+' '+clip(m,120)); if(mt.errs.length>40) mt.errs.shift(); var el2=$('errLog'); if(el2) el2.textContent=errLog.slice().reverse().join('\n'); }
 function noteCall(task,group,res){
@@ -515,6 +588,7 @@ function callHealth(){
   'models: '+models+'\n'+
   'tokens by group: '+grp+'\n'+
   'est. cost: US$'+mt.cost.toFixed(3)+(mt.costKnown?' ('+mt.costKnown+' call(s) priced by the hub)':'')+(mt.noPrice?' (a group had no price)':'')+'\n'+
+  'drive: autosaves ok '+mt.asOk+', failed '+mt.asFail+'; longest stretch not saved to Drive '+Math.round(Math.max(mt.gapMax,ST.unsavedSince?Date.now()-ST.unsavedSince:0)/60000)+' min; sign-in renewals '+mt.renewals+'; pack checks ok '+mt.pkOk+', failed '+mt.pkFail+'; newest pack version seen '+(mt.packVer||'none')+'; pack swaps '+mt.swaps+'\n'+
   'alerts raised: '+alertLog.length+'; Sidekick tabs seen: '+mt.tabsMax+'\n'+
   'errors: '+mt.errs.length+(errs.length?'\n  '+errs.join('\n  '):'');
 }
@@ -524,18 +598,24 @@ function callHealth(){
 var GATE='https://hub.taile4cbbe.ts.net:8444';
 var ALLOWED_GROUPS={'work-fallback':1,'work-sonnet':1};   // the only groups the hub's sidekick key may use; never the auto router
 // Built-in copy of routing.json (tests/lane_static_test.py fails if the two differ). routing.json is fetched at start and wins when it is valid.
-var DEFAULT_ROUTING={"version":1,"probe_ms":6000,"default":{"group":"work-sonnet","first_byte_ms":30000,"max_tokens":1500},"tasks":{"detect":{"group":"work-fallback","first_byte_ms":6000,"max_tokens":600},"summary":{"group":"work-fallback","first_byte_ms":8000,"max_tokens":1000},"room":{"group":"work-sonnet","first_byte_ms":30000,"max_tokens":1500},"answer":{"group":"work-sonnet","first_byte_ms":30000,"max_tokens":1500},"brief":{"group":"work-sonnet","first_byte_ms":30000,"max_tokens":2000},"wrap":{"group":"work-sonnet","first_byte_ms":60000,"max_tokens":12000}},"prices":{"work-sonnet":{"in":2,"cached":0.2,"out":10},"work-fallback":{"in":1,"cached":0.1,"out":5}}};
+var DEFAULT_ROUTING={"version":1,"probe_ms":6000,"default":{"group":"work-sonnet","first_byte_ms":30000,"max_tokens":1500},"tasks":{"detect":{"group":"work-fallback","first_byte_ms":6000,"max_tokens":600},"summary":{"group":"work-fallback","first_byte_ms":8000,"max_tokens":1000},"room":{"group":"work-sonnet","first_byte_ms":30000,"max_tokens":1500},"answer":{"group":"work-sonnet","first_byte_ms":30000,"max_tokens":1500},"brief":{"group":"work-sonnet","first_byte_ms":30000,"max_tokens":2000},"wrap":{"group":"work-sonnet","first_byte_ms":60000,"max_tokens":12000}},"prices":{"work-sonnet":{"in":2,"cached":0.2,"out":10},"work-fallback":{"in":1,"cached":0.1,"out":5}},"store":{"autosave_s":60,"request_timeout_s":20,"final_save_s":15,"local_max_bytes":2000000,"local_keep_h":24},"pack":{"poll_ms":120000,"stale_min":20}};
 var ROUTING=DEFAULT_ROUTING, TESTLONG=/[?&]test=long(&|$)/.test(location.search), TESTMODE=/[?&]test=(1|long)(&|$)/.test(location.search);
 var laneDown=false, lastProbe=0, lastModel='';
 function persistS(){ try{ localStorage.setItem(KEY,JSON.stringify(S)); }catch(e){} }
 function laneReady(){ return !laneDown && !!S.hubkey; }
 function okRoute(r){ return r && ALLOWED_GROUPS[r.group]===1 && r.first_byte_ms>=1000 && r.first_byte_ms<=60000 && r.max_tokens>=100 && r.max_tokens<=16000; }
+// 11 Nov 2026: routing.json "store" (autosave, browser copy) and "pack" (freshness) numbers. Optional; a missing key uses the built-in default, a present key must be a number in range or the whole file is rejected.
+var STORE_RANGES={autosave_s:[10,600],request_timeout_s:[5,120],final_save_s:[5,60],local_max_bytes:[100000,4000000],local_keep_h:[1,72]}, PACK_RANGES={poll_ms:[30000,600000],stale_min:[5,120]};
+function okSection(s,rg){ if(s==null) return true; if(typeof s!=='object') return false; return Object.keys(s).every(function(k){ var r=rg[k]; return r && typeof s[k]==='number' && isFinite(s[k]) && s[k]>=r[0] && s[k]<=r[1]; }); }
+function stc(k){ var s=ROUTING.store; return (s&&typeof s[k]==='number')?s[k]:DEFAULT_ROUTING.store[k]; }
+function pkc(k){ var s=ROUTING.pack; return (s&&typeof s[k]==='number')?s[k]:DEFAULT_ROUTING.pack[k]; }
 function okPrices(p){ if(p==null) return true; if(typeof p!=='object') return false; return Object.keys(p).every(function(g){ var v=p[g]; return ALLOWED_GROUPS[g]===1 && v && ['in','cached','out'].every(function(k){ return typeof v[k]==='number' && isFinite(v[k]) && v[k]>=0 && v[k]<=1000; }); }); }
 function validateRouting(j){
  if(!j||j.version!==1||!okRoute(j.default)||!j.tasks||typeof j.tasks!=='object') return null;
  var tasks=Object.keys(j.tasks); for(var i=0;i<tasks.length;i++){ if(!okRoute(j.tasks[tasks[i]])) return null; }
  if(!(j.probe_ms>=1000&&j.probe_ms<=30000)) return null;
  if(!okPrices(j.prices)) return null;
+ if(!okSection(j.store,STORE_RANGES)||!okSection(j.pack,PACK_RANGES)) return null;
  return j;
 }
 function loadRouting(){
@@ -922,7 +1002,7 @@ $('briefBtn').onclick=function(){
 };
 
 // ---------- wrap ----------
-var wrapText='', wrapLines=0, wrapBusy=false, callGen=0;
+var wrapText='', wrapLines=0, wrapBusy=false, callGen=0, wrapCut=null;
 function doWrap(after){
  if(wrapBusy) return;   // a wrap is already running: a second tap must not start a second call (9:04 call, 10 Nov)
  if(!lines.length){ $('wrapOut').textContent='No captions captured yet.'; return; }
@@ -932,9 +1012,10 @@ function doWrap(after){
  var full=lines.map(function(L){ return '['+clock(L.t)+'] '+(L.author||'?')+': '+L.text; }).join('\n');
  var q='Full caption transcript of the call (speaker names from Teams, words can be misheard):\n'+full.slice(-120000)+'\n\nWrite the wrap for Harsh only. Sections, each a short list, "None" when empty:\n1. Asked of Harsh (who asked, what, quote the caption)\n2. What Harsh said he would do (only his own lines, as said)\n3. Decisions that affect his work\n4. Follow-ups to send (to whom, one line each)\n5. Tracker updates to propose (tracker item id, the new log line)\nUse only what the captions say. Keep names, story numbers and dates as said; mark anything unclear (as heard).';
  wrapLines=lines.length;
- claudeAs('smart',q,12000,{task:'wrap'}).then(function(t){ if(g!==callGen) return; release(); wrapText=t; $('wrapOut').textContent=t; $('copyWrap').disabled=false; $('saveWrap').disabled=false; $('saveWrap').textContent='Save to Drive'; if(after) after(); }).catch(function(e){ if(g!==callGen) return; release(); $('wrapOut').textContent='Wrap failed: '+e.message; saving=false; $('saveWrap').disabled=!wrapText; $('saveWrap').textContent='Save to Drive'; });
+ var wcut=null; if(full.length>120000){ var tail=full.slice(-120000); wcut={n:tail.split('\n').length-1,m:lines.length}; }   // the wrap saw only the last 120,000 characters
+ claudeAs('smart',q,12000,{task:'wrap'}).then(function(t){ if(g!==callGen) return; release(); wrapText=t; wrapCut=wcut; $('wrapOut').textContent=t; $('copyWrap').disabled=false; $('saveWrap').disabled=false; $('saveWrap').textContent='Save to Drive'; if(after) after(); }).catch(function(e){ if(g!==callGen) return; release(); $('wrapOut').textContent='Wrap failed: '+e.message; saving=false; $('saveWrap').disabled=!wrapText; $('saveWrap').textContent='Save to Drive'; });
 }
-$('wrapBtn').onclick=function(){ if(wrapBusy) return; doWrap(); };
+$('wrapBtn').onclick=function(){ if(wrapBusy) return; storeKick(true); doWrap(); };
 $('copyWrap').onclick=function(){ if(navigator.clipboard) navigator.clipboard.writeText(wrapText+'\n\n'+callHealth()).then(function(){ $('copyWrap').textContent='Copied'; setTimeout(function(){ $('copyWrap').textContent='Copy'; },2000); }); };
 var saving=false, savedWrap=null;
 // WRAP-Q1 (10 Nov 2026, his answer 1): Save after new captions arrived asks, default 1: save as is (the new lines still go in the transcript) or re-wrap first.
@@ -952,9 +1033,8 @@ function saveNow(mode){
  hideSaveAsk();
  if(mode==='rewrap'){ saving=true; $('saveWrap').disabled=true; $('saveWrap').textContent='Re-wrapping...'; doWrap(function(){ banner(''); saving=false; saveNow('asis'); }); return; }
  saving=true; $('saveWrap').disabled=true; $('saveWrap').textContent='Saving...';
- var stamp=bcStamp(Date.now()), hf=callHealth();
- var full=lines.map(function(L){ return '['+clock(L.t)+'] '+(L.author||'?')+': '+L.text; }).join('\n')+'\n'+captureHealth()+'\n'+hf, w=wrapText+'\n\n'+hf, wt=wrapText;
- function go(){ driveSave('wrap-'+stamp+'.txt',w).then(function(){ return driveSave('transcript-'+stamp+'.txt',full); }).then(function(){ savedWrap=wt; saving=false; $('saveWrap').textContent='Saved'; }).catch(function(e){ saving=false; $('saveWrap').disabled=false; $('saveWrap').textContent='Save to Drive'; banner('Not saved: '+e.message); }); }
+ var stamp=bcStamp(Date.now()), wt=wrapText, wc=wrapCut;
+ function go(){ storeFinal().then(function(r){ if(!r.ok) throw new Error('the transcript was not saved ('+r.reason+')'); var nm=storeName(), hf=callHealth(), w=wt+'\n\n'+hf+'\n\ntranscript file: '+nm+(wc?'\nwrap read the last '+wc.n+' of '+wc.m+' lines; full text in '+nm:''); return driveSave('wrap-'+stamp+'.txt',w); }).then(function(){ savedWrap=wt; saving=false; $('saveWrap').textContent='Saved'; }).catch(function(e){ saving=false; $('saveWrap').disabled=false; $('saveWrap').textContent='Save to Drive'; banner('Not saved: '+e.message); }); }
  if(driveLive()) go(); else connectDrive(go);
 }
 $('saveWrap').onclick=function(){ saveNow(); };
@@ -962,12 +1042,214 @@ $('saveAsIs').onclick=function(){ saveNow('asis'); };
 $('saveRewrap').onclick=function(){ saveNow('rewrap'); };
 $('saveAsk').onkeydown=function(e){ if(e.key==='1'){ e.preventDefault(); saveNow('asis'); } else if(e.key==='2'){ e.preventDefault(); saveNow('rewrap'); } else if(e.key==='Escape'){ hideSaveAsk(); } };
 $('retryHub').onclick=laneRetryHub;
-$('newCall').onclick=function(){ if(lines.length && !confirm('Clear this call\'s captions and people?')) return; callGen++; wrapBusy=false; $('wrapBtn').disabled=false; hideSaveAsk(); hideResume(); mt=newMeeting(); laneNewMeeting(); renderUsage(); oldSig={}; lines.forEach(function(L){ oldSig[sig(L.author,L.text)]=1; }); savedWrap=null; saving=false; lines=[]; byKey={}; cur={}; callSum=''; sumAt=0; sumLines=0; heardPeople={}; chosen={}; hiddenSpans=[]; if(teamsHidden) hiddenSince=Date.now(); alertLog=[]; answering=null; gateNext=null; if(gateTimer){ clearTimeout(gateTimer); gateTimer=null; } renderAlerts(); wrapText=''; wrapLines=0; renderTx(); renderCard(); $('wrapOut').textContent='New call. Tap Wrap at the end.'; $('copyWrap').disabled=true; $('saveWrap').disabled=true; $('saveWrap').textContent='Save to Drive'; showAsk('Nothing yet.','','',false); };
+// ---------- call store: Drive transcript + browser copy (11 Nov 2026, Harsh's option 1 after the PBR lost a caption) ----------
+// ONE module. The whole call lives in `lines`. ingest() never touches this module: only the 1 s tick (storeTick) starts a Drive save, one at a time, and every save sends the WHOLE transcript
+// (content only grows, so a late older request is corrected by the next save). The browser copy (localStorage) is the safety net when Drive is down or signed out.
+var BACKOFF=[60,120,240,300];   // seconds after the 1st, 2nd, 3rd failure, then every 5 min
+function freshST(seq){ return {key:'',nameSeq:1,fileId:'',unsure:false,inflight:null,dirty:false,force:false,reassertAt:0,reassertNow:false,revSaved:'',savedAt:0,savedLines:0,savedBytes:0,lastStart:0,fails:0,nextAt:0,err:'',halt:'',signedOut:false,unsavedSince:0,finalAt:0,lastChange:0,lastRev:'',localAt:0,localSig:'',localErr:false,callSeq:seq||0}; }
+var ST=freshST(0), keyUsed={};
+var LKEY=KEY+'_call_', PKEY=KEY+'_prev', IKEY=KEY+'_idx', TKEY=KEY+'_test';
+function lsGet(k){ try{ return JSON.parse(localStorage.getItem(k)||'null'); }catch(e){ return null; } }
+function lsSet(k,v){ try{ localStorage.setItem(k,typeof v==='string'?v:JSON.stringify(v)); return true; }catch(e){ return false; } }
+function lsDel(k){ try{ localStorage.removeItem(k); }catch(e){} }
+function idxAdd(k){ var a=lsGet(IKEY)||[]; if(a.indexOf(k)<0){ a.push(k); lsSet(IKEY,a); } }
+function idxDel(k){ var a=lsGet(IKEY)||[], i=a.indexOf(k); if(i>-1){ a.splice(i,1); lsSet(IKEY,a); } }
+function storeKey(){ if(ST.key) return; var k=bcStamp(lines.length?lines[0].t:Date.now())+'-'+TABID; while(keyUsed[k]) k+='x'; keyUsed[k]=1; ST.key=k; }
+function storeName(){ return 'transcript-live-'+ST.key+(ST.nameSeq>1?'-'+ST.nameSeq:'')+'.txt'; }   // never matches the hub's wrap pick-up pattern ^wrap-...
+// a cheap change marker: the line count and the newest add/edit time among the last 15 lines (Teams only edits the newest lines)
+function revNow(){ var n=lines.length, m=0; for(var i=Math.max(0,n-15);i<n;i++){ var L=lines[i], c=Math.max(L.changed||0,L.t||0); if(c>m) m=c; } return n+':'+m; }
+function liveText(fin){
+ var now=Date.now(), n=lines.length, hf=callHealth();
+ return '--- Sidekick transcript v1 (page '+PAGE_V+', call from '+(n?bcTime(lines[0].t):'?')+', saved '+bcHM(now)+', '+n+' lines, '+(fin?'final':'in progress')+')\n'+
+  lines.map(function(L){ return '['+clock(L.t)+'] '+(L.author||'?')+': '+L.text; }).join('\n')+'\n'+captureHealth()+'\n'+hf;
+}
+function storeUnsaved(){ return !TESTMODE && lines.length>0 && (!ST.fileId || ST.revSaved!==revNow()); }
+// One save of the whole transcript. kind 'final' waits for a running save, then writes the final text; any other kind that finds a save running only marks dirty.
+function storeSave(kind){
+ var X=ST;
+ if(X.inflight){ if(kind==='final') return X.inflight.then(function(){ return storeSave(kind); }); X.dirty=true; return X.inflight; }
+ if(!lines.length) return Promise.resolve({ok:true,skipped:true});
+ storeKey();
+ var rv=revNow(), n=lines.length, t0=Date.now(), tmo=stc('request_timeout_s')*1000, fin=(kind==='final')||(X.finalAt>0&&rv===X.revSaved), text=liveText(fin), bytes=u8len(text);
+ X.lastStart=t0; X.dirty=false; X.force=false; X.reassertNow=false;
+ function create(){ return dfCreate(storeName(),text,tmo).then(function(r){ X.fileId=r.id; X.unsure=false; return r; },function(e){ if(!e.status&&!e.testMode) X.unsure=true; throw e; }); }
+ var go;
+ if(X.fileId) go=dfPatch(X.fileId,text,tmo).then(null,function(e){ if(e.status===404){ X.fileId=''; X.nameSeq++; X.unsure=false; return create(); } throw e; });   // the file was deleted or trashed: a new file with the next name (-2, -3)
+ else if(X.unsure) go=dfFind(storeName(),tmo).then(function(f){ if(f){ X.fileId=f.id; X.unsure=false; return dfPatch(f.id,text,tmo); } return create(); });   // after a lost create answer: look up the exact name, never a blind second create
+ else go=create();
+ X.inflight=go.then(function(r){
+  X.revSaved=rv; X.savedAt=Date.now(); X.savedLines=n; X.savedBytes=bytes; X.fails=0; X.nextAt=0; X.err=''; X.halt=''; X.signedOut=false; mt.asOk++;
+  if(X.timedOut){ X.timedOut=false; X.reassertAt=Date.now()+stc('autosave_s')*1000; }   // a timed-out older request may still land: write the newest text once more
+  return {ok:true,size:r.size,bytes:bytes};
+ },function(e){
+  if(e.testMode) return {ok:false,reason:e.message};
+  mt.asFail++; X.err=e.message;
+  if(e.timeout||(!e.status&&!e.testMode)) X.timedOut=true;
+  if(e.status===401){ gToken=null; gErr='Drive sign-in ended'; X.signedOut=true; X.err='Drive sign-in ended'; X.nextAt=0; }
+  else if(e.status===404&&!X.fileId){ X.halt='folder'; X.err='the Drive folder was not found: check the folder ID in Setup'; }
+  else { X.fails++; var d=BACKOFF[Math.min(X.fails-1,3)]*1000; if(e.status===429&&e.retryAfter) d=Math.max(d,e.retryAfter*1000); X.nextAt=Date.now()+d; }
+  return {ok:false,reason:X.err,status:e.status};
+ }).then(function(res){ X.inflight=null; return res; });
+ return X.inflight;
+}
+// Final save for Save to Drive and New call: read-back of the size (must equal the UTF-8 byte length, else one more save), capped at routing.store.final_save_s.
+function storeFinal(){
+ var cap=stc('final_save_s')*1000;
+ return new Promise(function(resolve){
+  var settled=false, tm=setTimeout(function(){ if(!settled){ settled=true; resolve({ok:false,reason:'no answer from Drive within '+Math.round(cap/1000)+' s'}); } },cap);
+  function fin(r){ if(settled) return; settled=true; clearTimeout(tm); resolve(r); }
+  function attempt(k){ storeSave('final').then(function(r){
+   if(!r.ok) return fin(r);
+   if(r.size!=null&&r.size!==r.bytes){ if(k<2) return attempt(k+1); return fin({ok:false,reason:'Drive kept '+r.size+' of '+r.bytes+' bytes'}); }
+   ST.finalAt=Date.now(); fin(r);
+  }); }
+  attempt(1);
+ });
+}
+function storeTick(){
+ var now=Date.now(); localTick(now); renderTxPill(now);
+ if(TESTMODE||!lines.length) return;
+ storeKey();
+ var rv=revNow();
+ if(rv!==ST.lastRev){ if(ST.lastRev&&now-ST.lastChange>1200000) ST.force=true; ST.lastRev=rv; ST.lastChange=now; if(ST.finalAt) ST.finalAt=0; }   // captions resuming after a 20 min gap: save at once
+ var changed=rv!==ST.revSaved;
+ if(changed){ if(!ST.unsavedSince) ST.unsavedSince=now; } else ST.unsavedSince=0;
+ if(ST.unsavedSince&&now-ST.unsavedSince>mt.gapMax) mt.gapMax=now-ST.unsavedSince;
+ if(ST.reassertAt&&now>=ST.reassertAt){ ST.reassertAt=0; ST.reassertNow=true; }
+ var due=ST.force||ST.reassertNow;
+ if(!due&&changed){ if(ST.fails>0) due=now>=ST.nextAt; else due=(!ST.fileId&&!ST.unsure)||now-ST.lastStart>=stc('autosave_s')*1000; }   // the first line creates the file at once
+ if(!due||ST.halt) return;
+ if(!S.gfolder||!S.gcid) return;
+ if(!driveLive()){ ST.signedOut=true; return; }
+ if(ST.inflight){ ST.dirty=true; return; }
+ if(now<ST.nextAt&&!ST.force) return;
+ storeSave('auto');
+}
+// At once: Wrap, Save, New call, the tab going to the background. A user tap (user=true) also clears a stopped state so he can retry.
+function storeKick(user){ if(TESTMODE||!lines.length) return; if(user){ ST.halt=''; ST.nextAt=0; } ST.force=true; try{ storeTick(); }catch(e){ logErr('store: '+e.message); } }
+function storeSignedIn(){ ST.signedOut=false; ST.nextAt=0; ST.force=lines.length>0; PK.lastPoll=0; try{ storeTick(); }catch(e){ logErr('store: '+e.message); } }
+function storeTap(){
+ if(TESTMODE) return;
+ if(!S.gcid||!S.gfolder){ $('setup').open=true; banner('Add the Google client ID and the Drive folder ID in Setup.'); return; }
+ ST.halt=''; ST.nextAt=0; ST.force=lines.length>0;
+ if(!driveLive()||gExp-Date.now()<=600000) connectDrive(function(){}); else storeTick();   // the renewal happens inside this tap, never by itself
+}
+$('txPill').onclick=storeTap;
+function renderTxPill(now){
+ var p=$('txPill'); if(!p) return;
+ var t='', c='', n=lines.length, left=driveLive()?gExp-now:-1, ending=left>=0&&left<=600000, saved=ST.savedAt?'saved '+bcTime(ST.savedAt)+' ('+ST.savedLines+' lines)':'';
+ if(TESTMODE){ t='Transcript: not saved (test mode)'; }
+ else if(!S.gcid||!S.gfolder){ if(n){ t='Transcript: not saved to Drive (add the client ID and folder in Setup). Kept in this browser'; c='bad'; } else t='Transcript: no captions yet'; }
+ else if(ST.halt){ t='Transcript: not saved: '+ST.err+'. Kept in this browser'; c='bad'; }
+ else if(!driveLive()&&(n||ST.fileId)){ t='Transcript: Drive signed out'+(saved?' (last '+saved+')':'')+': tap here to sign in. Kept in this browser'; c='bad'; }
+ else if(ST.fails>0||ST.signedOut){ t='Transcript: not saved'+(ST.savedAt?' since '+bcTime(ST.savedAt):'')+': '+ST.err+'. Kept in this browser'; c='bad'; }
+ else if(ending){ t='Drive sign-in ends in '+Math.max(1,Math.round(left/60000))+' min: tap to renew'+(saved?' ('+saved+')':''); c='warn'; }
+ else if(!n){ t='Transcript: no captions yet'; }
+ else if(ST.unsavedSince&&ST.revSaved!==revNow()&&now-ST.unsavedSince>180000){ t='Transcript: '+(saved||'not saved yet')+'; newer lines are only kept in this browser'; c='warn'; }
+ else if(saved){ t='Transcript: '+saved; c='ok'; }
+ else t='Transcript: waiting for the first save';
+ if(ST.localErr&&n&&!TESTMODE) t+=' | browser copy FAILED';
+ p.textContent=t; p.className='pill'+(c?' '+c:'');
+ var rp=$('restorePrev'); if(rp) rp.style.display=(!TESTMODE&&!n&&prevSlot)?'inline-block':'none';
+}
+// ---- the browser copy ----
+var prevSlot=null;
+function snapshot(){
+ var rl=lines.map(function(L){ return {t:L.t,author:L.author,text:L.text,key:L.key}; }), rec={v:1,callKey:ST.key,fileId:ST.fileId,nameSeq:ST.nameSeq,lines:rl,alerts:alertLog,wrap:{text:wrapText,n:wrapLines,cut:wrapCut},mt:mt,savedBytes:ST.savedBytes,savedLines:ST.savedLines,finalAt:ST.finalAt,at:Date.now(),trimmed:0};
+ var s=JSON.stringify(rec), size=u8len(s), cap=stc('local_max_bytes'), keep=rl.length;
+ while(size>cap&&keep>1){ keep=Math.max(1,Math.min(keep-1,Math.floor(keep*cap/size*0.95))); rec.lines=rl.slice(-keep); rec.trimmed=rl.length-keep; s=JSON.stringify(rec); size=u8len(s); }   // too big: keep the newest lines, say the older ones are only in Drive
+ return {rec:rec,json:s};
+}
+function localWrite(now){
+ if(!lines.length) return;
+ storeKey();
+ var sn=snapshot(), ok=lsSet(TESTMODE?TKEY:LKEY+ST.key,sn.json);
+ if(!TESTMODE&&ok) idxAdd(ST.key);
+ ST.localAt=now||Date.now(); ST.localErr=!ok; ST.localSig=revNow()+'|'+alertLog.length+'|'+wrapText.length+'|'+ST.fileId+'|'+ST.savedBytes+'|'+ST.finalAt;
+}
+function localTick(now){
+ if(!lines.length) return;
+ var sig=revNow()+'|'+alertLog.length+'|'+wrapText.length+'|'+ST.fileId+'|'+ST.savedBytes+'|'+ST.finalAt;
+ if(sig!==ST.localSig&&now-ST.localAt>=10000) localWrite(now);   // every 10 s when something changed
+}
+function showStoreBar(id,text){ var b=$(id); b.style.display='flex'; var s=$(id+'Txt'); if(s) s.textContent=text; }
+function hideBar(id){ var b=$(id); if(b) b.style.display='none'; }
+// Restore: puts back the lines, alerts, wrap and file id and continues the SAME Drive file. Lines already here (Teams kept sending) are kept after the restored ones.
+function restoreRec(rec){
+ var now=Date.now(), mine=lines.slice(), out=[];
+ byKey={}; cur={};
+ (rec.lines||[]).forEach(function(r,i){ var L={key:'r'+i,author:r.author,text:r.text,t:r.t,changed:r.t,checked:true}; byKey[L.key]=L; out.push(L); });
+ mine.forEach(function(L){ var sg=sig(L.author,L.text), dup=false, rec30=out.slice(-30); for(var i=rec30.length-1;i>=0;i--){ if(sig(rec30[i].author,rec30[i].text)===sg){ dup=true; break; } } if(!dup){ L.key='n'+out.length; byKey[L.key]=L; out.push(L); } });
+ lines=out; ST=freshST(ST.callSeq); ST.key=rec.callKey; keyUsed[ST.key]=1; ST.fileId=rec.fileId||''; ST.nameSeq=rec.nameSeq||1; ST.savedBytes=rec.savedBytes||0; ST.savedLines=rec.savedLines||0;
+ alertLog=rec.alerts||[]; renderAlerts();
+ var w=rec.wrap||{}; wrapText=w.text||''; wrapLines=w.n||0; wrapCut=w.cut||null; savedWrap=null;
+ if(wrapText){ $('wrapOut').textContent=wrapText; $('copyWrap').disabled=false; $('saveWrap').disabled=false; }
+ mt=Object.assign(newMeeting(),rec.mt||{}); mt.packVer=(PACK&&PACK.built)||mt.packVer||'';
+ heardPeople={}; lines.forEach(function(L){ if(L.author&&!isMe(L.author)&&!heardPeople[L.author]){ heardPeople[L.author]=1; var pp=matchPerson(L.author); if(pp) chosen[pp.name]=true; } });
+ renderCard(); renderTx(); sumLines=0; ST.lastRev=revNow(); ST.lastChange=now; localWrite(now);
+}
+function describeRec(rec){ return 'from '+bcTime(rec.lines.length?rec.lines[0].t:rec.at)+', '+rec.lines.length+' lines'+(rec.trimmed?' (older '+rec.trimmed+' lines only in Drive)':'')+', kept '+bcTime(rec.at); }
+var pendingRec=null;
+function localInit(){
+ lsDel(TKEY);   // anything a test-mode run left behind (it never touches the real copies)
+ if(TESTMODE) return;
+ var now=Date.now(), keepMs=stc('local_keep_h')*3600000, idx=lsGet(IKEY)||[], live=[], cands=[];
+ idx.forEach(function(k){ var r=lsGet(LKEY+k); if(!r||r.v!==1||!(now-r.at<keepMs)){ lsDel(LKEY+k); return; } live.push(k); if(r.finalAt) return; if(k.slice(-TABID.length)===TABID||now-r.at>45000) cands.push(r); });   // another tab's copy is only offered when it has gone quiet
+ lsSet(IKEY,live);
+ var pv=lsGet(PKEY); if(pv&&!(pv.v===1&&now-pv.at<keepMs)){ lsDel(PKEY); pv=null; }
+ prevSlot=pv;
+ cands.sort(function(a,b){ return b.at-a.at; });
+ if(cands[0]){ pendingRec=cands[0]; showStoreBar('restoreBar','An unsaved call is kept in this browser ('+describeRec(pendingRec)+').'); }
+}
+function dropRec(rec){ if(!rec) return; lsDel(LKEY+rec.callKey); idxDel(rec.callKey); }
+$('restoreNow').onclick=function(){ var r=pendingRec; pendingRec=null; hideBar('restoreBar'); if(r){ restoreRec(r); } };
+$('restoreSave').onclick=function(){ var r=pendingRec; pendingRec=null; hideBar('restoreBar'); if(!r) return; restoreRec(r); newCallSave(function(){ doClear(); }); };
+$('restoreDrop').onclick=function(){ var r=pendingRec; pendingRec=null; hideBar('restoreBar'); dropRec(r); };
+$('restoreBar').onkeydown=function(e){ if(e.key==='1'){ e.preventDefault(); $('restoreNow').onclick(); } else if(e.key==='2'){ e.preventDefault(); $('restoreSave').onclick(); } else if(e.key==='3'){ e.preventDefault(); $('restoreDrop').onclick(); } };
+$('restorePrev').onclick=function(){ if(lines.length||!prevSlot) return; var r=prevSlot; prevSlot=null; lsDel(PKEY); restoreRec(r); };
+function localNow(){ if(TESTMODE){ if(lines.length) localWrite(); return; } try{ if(lines.length) localWrite(); }catch(e){} }
+try{ window.addEventListener('pagehide',function(){ if(TESTMODE){ lsDel(TKEY); return; } localNow(); }); }catch(e){}
+try{ window.addEventListener('beforeunload',function(e){ if(storeUnsaved()){ e.preventDefault(); e.returnValue=''; return ''; } }); }catch(e){}
+try{ window.addEventListener('online',function(){ ST.nextAt=0; PK.lastPoll=0; }); }catch(e){}
+try{ document.addEventListener('visibilitychange',function(){ if(document.hidden){ localNow(); storeKick(false); } }); }catch(e){}
+// ---- New call: a final Drive save first, then the existing confirm ----
+function hideClearAsk(){ hideBar('clearAsk'); }
+function askClear(reason,next){
+ $('clearAskTxt').textContent='The call is not saved to Drive ('+reason+').';
+ $('clearReconnect').onclick=function(){ hideClearAsk(); connectDrive(function(){ newCallSave(next); }); };
+ $('clearDownload').onclick=function(){ downloadCopy(); };
+ $('clearAnyway').onclick=function(){ hideClearAsk(); doClear(); };   // the call goes to the previous-call slot
+ $('clearCancel').onclick=hideClearAsk;
+ $('clearAsk').onkeydown=function(e){ var m={'1':'clearReconnect','2':'clearDownload','3':'clearAnyway','4':'clearCancel'}[e.key]; if(m){ e.preventDefault(); $(m).onclick(); } else if(e.key==='Escape') hideClearAsk(); };
+ $('clearAsk').style.display='flex'; try{ $('clearReconnect').focus(); }catch(e){}
+}
+function downloadCopy(){
+ try{ var a=document.createElement('a'); a.href=URL.createObjectURL(new Blob([liveText(false)],{type:'text/plain'})); a.download=(ST.key?storeName():'transcript-copy.txt'); document.body.appendChild(a); a.click(); }catch(e){ banner('Could not make the download: '+e.message); }
+}
+function newCallSave(next){
+ hideClearAsk();
+ if(!S.gfolder||!S.gcid) return next();   // Drive was never set up: only the browser copy exists, nothing to wait for
+ if(!driveLive()) return askClear('Drive is signed out',next);
+ banner('Saving the call to Drive before clearing...');
+ storeFinal().then(function(r){ banner(''); if(r.ok) next(); else askClear(r.reason,next); });
+}
+function newCallClick(){
+ if(!lines.length){ doClear(); return; }
+ if(TESTMODE){ if(!confirm('Clear this call\'s captions and people?')) return; doClear(); return; }
+ newCallSave(function(){ if(!confirm('Clear this call\'s captions and people?')) return; doClear(); });
+}
+function storeOnClear(){
+ if(TESTMODE){ lsDel(TKEY); ST=freshST(ST.callSeq+1); return; }
+ if(lines.length){ storeKey(); var sn=snapshot(); sn.rec.finalAt=ST.finalAt; if(lsSet(PKEY,sn.json)){ prevSlot=sn.rec; } lsDel(LKEY+ST.key); idxDel(ST.key); }   // the cleared call always goes to the previous-call slot
+ ST=freshST(ST.callSeq+1);
+}
+function doClear(){ storeOnClear(); hideClearAsk(); callGen++; wrapBusy=false; $('wrapBtn').disabled=false; hideSaveAsk(); hideResume(); mt=newMeeting(); laneNewMeeting(); renderUsage(); oldSig={}; lines.forEach(function(L){ oldSig[sig(L.author,L.text)]=1; }); savedWrap=null; saving=false; lines=[]; byKey={}; cur={}; callSum=''; sumAt=0; sumLines=0; heardPeople={}; chosen={}; hiddenSpans=[]; if(teamsHidden) hiddenSince=Date.now(); alertLog=[]; answering=null; gateNext=null; if(gateTimer){ clearTimeout(gateTimer); gateTimer=null; } renderAlerts(); wrapText=''; wrapLines=0; wrapCut=null; renderTx(); renderCard(); $('wrapOut').textContent='New call. Tap Wrap at the end.'; $('copyWrap').disabled=true; $('saveWrap').disabled=true; $('saveWrap').textContent='Save to Drive'; showAsk('Nothing yet.','','',false);  }
+$('newCall').onclick=newCallClick;
 // ---------- wiring ----------
 $('testBtn').onclick=function(){ startTest(); };
-renderPath(); setTestBar();
+renderPath(); setTestBar(); renderPackPill();
 if(!S.hubkey) setLanePill('Work lane: add the hub key in Setup','warn'); else setLanePill('Work lane: not checked yet','');
-loadRouting().then(function(){ probeLane('page'); if(TESTMODE) startTest(); });
+loadRouting().then(function(){ localInit(); probeLane('page'); if(TESTMODE) startTest(); });
 beat();
 })();
 </script>

@@ -49,5 +49,16 @@
       "cached": 0.1,
       "out": 5
     }
+  },
+  "store": {
+    "autosave_s": 60,
+    "request_timeout_s": 20,
+    "final_save_s": 15,
+    "local_max_bytes": 2000000,
+    "local_keep_h": 24
+  },
+  "pack": {
+    "poll_ms": 120000,
+    "stale_min": 20
   }
 }

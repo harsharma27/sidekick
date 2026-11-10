@@ -75,7 +75,7 @@ a.bm{display:inline-block;padding:7px 12px;border-radius:8px;background:var(--ch
 <div id="tabBar" role="alert"></div>
 <div id="resumeBar" role="status"></div>
 <div id="tabNote" class="muted"></div>
-<div id="laneBar" role="status"></div>
+<div id="laneBar" role="status"></div><button id="retryHub" type="button" style="display:none;margin:0 0 10px">Retry hub</button>
 <div id="testBar" role="status"></div>
 
 <div class="card" id="ask">
@@ -492,7 +492,7 @@ function renderUsage(){ var paused=Date.now()<pausedUntil; $('aiPill').textConte
 renderUsage();
 var errLog=[];
 // Per-meeting counters for the call-health footer (10 Nov 2026, fix 4). Counts, times, models, tokens, cost and error classes only: never caption text.
-var PAGE_V='2026-11-10.1';
+var PAGE_V='2026-11-10.3';
 function newMeeting(){ return {start:Date.now(),calls:{},ok:0,fail:0,retries:0,cutRetries:0,stops:0,models:{},groups:{},cost:0,costKnown:0,noPrice:false,errs:[],tabsMax:1}; }
 var mt=newMeeting();
 function logErr(m){ errLog.push(clock(Date.now())+'  '+m); mt.errs.push(clock(Date.now())+' '+clip(m,120)); if(mt.errs.length>40) mt.errs.shift(); var el2=$('errLog'); if(el2) el2.textContent=errLog.slice().reverse().join('\n'); }
@@ -524,7 +524,7 @@ function callHealth(){
 var GATE='https://hub.taile4cbbe.ts.net:8444';
 var ALLOWED_GROUPS={'work-fallback':1,'work-sonnet':1};   // the only groups the hub's sidekick key may use; never the auto router
 // Built-in copy of routing.json (tests/lane_static_test.py fails if the two differ). routing.json is fetched at start and wins when it is valid.
-var DEFAULT_ROUTING={"version":1,"probe_ms":6000,"default":{"group":"work-sonnet","first_byte_ms":12000,"max_tokens":1500},"tasks":{"detect":{"group":"work-fallback","first_byte_ms":6000,"max_tokens":600},"summary":{"group":"work-fallback","first_byte_ms":8000,"max_tokens":1000},"room":{"group":"work-sonnet","first_byte_ms":12000,"max_tokens":1500},"answer":{"group":"work-sonnet","first_byte_ms":12000,"max_tokens":1500},"brief":{"group":"work-sonnet","first_byte_ms":12000,"max_tokens":2000},"wrap":{"group":"work-sonnet","first_byte_ms":20000,"max_tokens":12000}},"prices":{"work-sonnet":{"in":2,"cached":0.2,"out":10},"work-fallback":{"in":1,"cached":0.1,"out":5}}};
+var DEFAULT_ROUTING={"version":1,"probe_ms":6000,"default":{"group":"work-sonnet","first_byte_ms":30000,"max_tokens":1500},"tasks":{"detect":{"group":"work-fallback","first_byte_ms":6000,"max_tokens":600},"summary":{"group":"work-fallback","first_byte_ms":8000,"max_tokens":1000},"room":{"group":"work-sonnet","first_byte_ms":30000,"max_tokens":1500},"answer":{"group":"work-sonnet","first_byte_ms":30000,"max_tokens":1500},"brief":{"group":"work-sonnet","first_byte_ms":30000,"max_tokens":2000},"wrap":{"group":"work-sonnet","first_byte_ms":60000,"max_tokens":12000}},"prices":{"work-sonnet":{"in":2,"cached":0.2,"out":10},"work-fallback":{"in":1,"cached":0.1,"out":5}}};
 var ROUTING=DEFAULT_ROUTING, TESTLONG=/[?&]test=long(&|$)/.test(location.search), TESTMODE=/[?&]test=(1|long)(&|$)/.test(location.search);
 var laneDown=false, lastProbe=0, lastModel='';
 function persistS(){ try{ localStorage.setItem(KEY,JSON.stringify(S)); }catch(e){} }
@@ -544,7 +544,7 @@ function loadRouting(){
 function routeFor(task){ return (ROUTING.tasks&&ROUTING.tasks[task])||ROUTING.default; }
 function clip(s,n){ s=String(s==null?'':s); return s.length>(n||200)?s.slice(0,n||200)+'...':s; }
 function setLanePill(text,cls){ var p=$('lanePill'); p.textContent=text; p.className='pill'+(cls?' '+cls:''); }
-function setLaneBar(text,cls){ var b=$('laneBar'); if(!text){ b.style.display='none'; b.textContent=''; return; } b.textContent=text; b.className=cls||''; b.style.display='block'; }
+function setLaneBar(text,cls){ var b=$('laneBar'); if(!text){ b.style.display='none'; b.textContent=''; var r0=$('retryHub'); if(r0) r0.style.display='none'; return; } b.textContent=text; b.className=cls||''; b.style.display='block'; }
 function renderPath(){
  var txt=laneDown?'Work lane unreachable: stopped for this call':'Answering: '+routeFor('answer').group+' (detect: '+routeFor('detect').group+')';
  var mp=$('modelPill'); mp.textContent=txt+(lastModel?' | last: '+lastModel:''); mp.className='pill'+(laneDown?' bad':'');
@@ -568,9 +568,10 @@ function laneError(status,tx,retryAfter){
 function laneStop(reason){
  if(!laneDown){ laneDown=true; mt.stops++; }
  setLanePill('Work lane: down','bad');
- setLaneBar('Work lane unreachable: stopped for this call ('+reason+'). Nothing is being answered. Tap New call to try the hub again.','bad');
+ setLaneBar('Work lane unreachable: stopped for this call ('+reason+'). Nothing is being answered. Tap Retry hub (captions are kept) or New call.','bad'); var rb=$('retryHub'); if(rb) rb.style.display='inline-block';
  renderPath();
 }
+function laneRetryHub(){ laneDown=false; pausedUntil=0; failRun=0; banner(''); var rb=$('retryHub'); if(rb) rb.style.display='none'; netFails=0; mt.retries++; setLaneBar(''); renderPath(); probeLane('retry'); renderUsage(); }   // keeps captions, people and the meeting
 function laneNewMeeting(){ laneDown=false; setLaneBar(''); renderPath(); probeLane('meeting'); }
 // Streaming reader for an OpenAI-format Server-Sent-Events reply. onFirst runs on the first chunk (the first-byte deadline stops there).
 function readStream(r,onFirst){
@@ -605,12 +606,12 @@ function laneSystem(opts){
  var cst=(opts&&opts.noSheet)?'':callSheetText(); if(cst) sys+='\n\n'+cst;
  return sys;
 }
-function laneOnce(task,userText,maxTok,tmo,opts){
- var rt=routeFor(task), sys=laneSystem(opts);
+function laneOnce(task,userText,maxTok,tmo,opts,fbOver){
+ var rt0=routeFor(task), sys=laneSystem(opts), rt={group:rt0.group,max_tokens:rt0.max_tokens,first_byte_ms:fbOver||rt0.first_byte_ms};
  var ctl=new AbortController(), got=false, t0=Date.now();
  var tTotal=setTimeout(function(){ ctl.abort(); },tmo), tFirst=setTimeout(function(){ if(!got) ctl.abort(); },rt.first_byte_ms);
  function done(){ clearTimeout(tTotal); clearTimeout(tFirst); }
- function transport(msg){ done(); var er=new Error(msg); er.laneTransport=true; er.retry=true; return er; }
+ function transport(msg,net){ done(); var er=new Error(msg); if(net) er.net=true; else er.slow=true; er.retry=true; return er; }   // slow = no first byte in time (one request, NOT a lane stop); net = the fetch itself failed
  var headers={'content-type':'application/json','authorization':'Bearer '+S.hubkey,'x-sk-fallbacks':'0'};
  var req={model:rt.group,max_tokens:maxTok,stream:true,stream_options:{include_usage:true},messages:[{role:'system',content:sys},{role:'user',content:userText}]};
  if(task) req.metadata={hub_task:'sidekick-'+task};   // so the door log names the Sidekick task (the gate forwards metadata)
@@ -623,16 +624,17 @@ function laneOnce(task,userText,maxTok,tmo,opts){
    noteCall(task,rt.group,res);
    return finishReply('Work lane',res.model||rt.group,res.finish,'text',res.outTok,res.text,res.finish==='length');
   },function(e){
-   done(); if(e.refused||e.laneTransport||e.retry!=null) throw e;
+   done(); if(e.refused||e.laneTransport||e.slow||e.net||e.retry!=null) throw e;
    if(!got) throw transport('no first byte within '+rt.first_byte_ms+' ms');
    var er=new Error('Work lane: the reply broke off ('+clip(e.message,80)+')'); er.retry=true; throw er;   // after the first byte: retried on the same path
   });
  },function(e){
-  if(e.name==='AbortError'||e instanceof TypeError){ if(!got) throw transport(e.name==='AbortError'?'no first byte within '+rt.first_byte_ms+' ms':'network error or the hub cannot be reached'); done(); var er=new Error('The AI request timed out.'); er.retry=true; throw er; }
+  if(e.name==='AbortError'||e instanceof TypeError){ if(!got) throw transport(e.name==='AbortError'?'no first byte within '+rt.first_byte_ms+' ms':'network error or the hub cannot be reached',e.name!=='AbortError'); done(); var er=new Error('The AI request timed out.'); er.retry=true; throw er; }
   done(); throw e;
  });
 }
-var lastTtfb=0;
+var lastTtfb=0, netFails=0, autoProbeP=null;
+function autoProbe(){ if(!autoProbeP){ lastProbe=0; autoProbeP=probeLane('auto').then(function(){ autoProbeP=null; },function(){ autoProbeP=null; }); } return autoProbeP; }
 // Health probe (GET /v1/models) at page start and at the start of each meeting.
 function probeLane(why){
  if(!S.hubkey) return Promise.resolve();
@@ -691,20 +693,27 @@ function claudeAs(role,userText,maxTok,opts){ return claude(userText,maxTok,opts
 // retries: ONE retry at min(2x, 16000) when the reply ran out of tokens, and a short wait on rate limit, network error or timeout. Never another host.
 function claude(userText,maxTok,opts){
  opts=opts||{};
- if(laneDown) return Promise.reject(new Error('Work lane unreachable: stopped for this call. Tap New call to try the hub again.'));
+ if(laneDown) return Promise.reject(new Error('Work lane unreachable: stopped for this call. Tap Retry hub to try the hub again.'));
  if(!S.hubkey) return Promise.reject(new Error('Add the hub key in Setup (work lane).'));
  if(usage.day!==today()) usage=loadUsage();
  if(usage.calls>=S.cap) return Promise.reject(new Error('Daily AI cap reached ('+S.cap+'). Raise it in settings if needed.'));
  if(Date.now()<pausedUntil) return Promise.reject(new Error('AI paused until '+clock(pausedUntil)+' after 3 failures in a row: '+lastAIErr+' (details in Setup > AI errors)'));
- var tok=routeFor(opts.task).max_tokens, tmo=tok>=4000?180000:90000, tries=0, lenRetried=false;
+ var tok=routeFor(opts.task).max_tokens, tmo=tok>=4000?180000:90000, tries=0, lenRetried=false, fb=routeFor(opts.task).first_byte_ms, slowRetried=false;
  function attempt(){
   tries++;
-  return laneOnce(opts.task,userText,tok,tmo,opts).then(function(t){ failRun=0; banner(''); return t; },function(e){
+  return laneOnce(opts.task,userText,tok,tmo,opts,fb).then(function(t){ failRun=0; netFails=0; banner(''); return t; },function(e){
    logErr('try '+tries+': '+e.message); mt.fail++;
-   if(e.laneTransport){   // the hub cannot be reached: stop for this call, no other path
-    laneStop(e.message); usage.fails=(usage.fails||0)+1; try{ localStorage.setItem(KEY+'_usage',JSON.stringify(usage)); }catch(x){}
-    lastAIErr=e.message; renderUsage(); throw new Error('Work lane unreachable: stopped for this call ('+e.message+')');
+   if(!e.net&&!e.laneTransport) netFails=0;
+   if(e.slow){   // first byte too slow: not a lane stop. ONE retry with double the wait (cap 60 s), then the error is shown for this request only
+    if(!slowRetried){ slowRetried=true; fb=Math.min(fb*2,60000); mt.retries++; banner('The hub is slow to start answering, retrying once with a longer wait ('+Math.round(fb/1000)+' s)...'); return attempt(); }
+    e.retry=false;
    }
+   var probing=null;
+   if(e.net||e.laneTransport){   // network failure or HTTP 5xx: never a stop by itself. The second one in a row asks the health probe (shared by concurrent requests)
+    e.laneTransport=false;
+    if(++netFails>=2){ netFails=0; e.retry=false; probing=autoProbe(); } else e.retry=true;
+   }
+   function rest(){
    if(e.refused){ lastAIErr=e.message; usage.fails=(usage.fails||0)+1; try{ localStorage.setItem(KEY+'_usage',JSON.stringify(usage)); }catch(x){} setLanePill(e.message.replace(/^Work lane: /,'Work lane '),'bad'); renderUsage(); throw e; }   // a refusal is shown, never retried, never counted toward the 3-failure pause
    usage.fails=(usage.fails||0)+1; try{ localStorage.setItem(KEY+'_usage',JSON.stringify(usage)); }catch(x){}
    if(e.moreTokens && !lenRetried){ var nt=Math.min(tok*2,16000); if(nt>tok){ lenRetried=true; tok=nt; mt.cutRetries++; banner('AI reply was cut short, retrying once with more room...'); return attempt(); } }
@@ -712,6 +721,12 @@ function claude(userText,maxTok,opts){
    if(tries<3 && e.retry){ var wait=tries===1?2000:6000; mt.retries++; banner('AI busy ('+e.message+'), retrying in '+(wait/1000)+' s...'); return new Promise(function(res){ setTimeout(res,wait); }).then(attempt); }
    failRun++; lastAIErr=e.message; if(failRun>=3){ pausedUntil=Date.now()+300000; failRun=0; banner('AI paused for 5 minutes after 3 failures in a row: '+e.message); }
    renderUsage(); throw e;
+   }
+   if(probing) return probing.then(function(){
+    if(laneDown){ usage.fails=(usage.fails||0)+1; try{ localStorage.setItem(KEY+'_usage',JSON.stringify(usage)); }catch(x){} lastAIErr=e.message; renderUsage(); throw new Error('Work lane unreachable: stopped for this call ('+e.message+')'); }
+    return rest();   // the hub answered the probe: this one request shows its error, the lane stays up
+   });
+   return rest();
   });
  }
  return attempt();
@@ -946,6 +961,7 @@ $('saveWrap').onclick=function(){ saveNow(); };
 $('saveAsIs').onclick=function(){ saveNow('asis'); };
 $('saveRewrap').onclick=function(){ saveNow('rewrap'); };
 $('saveAsk').onkeydown=function(e){ if(e.key==='1'){ e.preventDefault(); saveNow('asis'); } else if(e.key==='2'){ e.preventDefault(); saveNow('rewrap'); } else if(e.key==='Escape'){ hideSaveAsk(); } };
+$('retryHub').onclick=laneRetryHub;
 $('newCall').onclick=function(){ if(lines.length && !confirm('Clear this call\'s captions and people?')) return; callGen++; wrapBusy=false; $('wrapBtn').disabled=false; hideSaveAsk(); hideResume(); mt=newMeeting(); laneNewMeeting(); renderUsage(); oldSig={}; lines.forEach(function(L){ oldSig[sig(L.author,L.text)]=1; }); savedWrap=null; saving=false; lines=[]; byKey={}; cur={}; callSum=''; sumAt=0; sumLines=0; heardPeople={}; chosen={}; hiddenSpans=[]; if(teamsHidden) hiddenSince=Date.now(); alertLog=[]; answering=null; gateNext=null; if(gateTimer){ clearTimeout(gateTimer); gateTimer=null; } renderAlerts(); wrapText=''; wrapLines=0; renderTx(); renderCard(); $('wrapOut').textContent='New call. Tap Wrap at the end.'; $('copyWrap').disabled=true; $('saveWrap').disabled=true; $('saveWrap').textContent='Save to Drive'; showAsk('Nothing yet.','','',false); };
 // ---------- wiring ----------
 $('testBtn').onclick=function(){ startTest(); };

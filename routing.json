@@ -3,7 +3,7 @@
   "probe_ms": 6000,
   "default": {
     "group": "work-sonnet",
-    "first_byte_ms": 12000,
+    "first_byte_ms": 30000,
     "max_tokens": 1500
   },
   "tasks": {
@@ -19,22 +19,22 @@
     },
     "room": {
       "group": "work-sonnet",
-      "first_byte_ms": 12000,
+      "first_byte_ms": 30000,
       "max_tokens": 1500
     },
     "answer": {
       "group": "work-sonnet",
-      "first_byte_ms": 12000,
+      "first_byte_ms": 30000,
       "max_tokens": 1500
     },
     "brief": {
       "group": "work-sonnet",
-      "first_byte_ms": 12000,
+      "first_byte_ms": 30000,
       "max_tokens": 2000
     },
     "wrap": {
       "group": "work-sonnet",
-      "first_byte_ms": 20000,
+      "first_byte_ms": 60000,
       "max_tokens": 12000
     }
   },

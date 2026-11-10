@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<!-- CSP (9 Nov 2026): connect-src is the hub gate, Anthropic (direct path), Drive (save/pack), Google sign-in, OpenRouter (optional old path) and this site (routing.json). Nothing else can be called, so an injected script cannot send captions anywhere new. -->
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' https://accounts.google.com; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' https://hub.taile4cbbe.ts.net:8444 https://api.anthropic.com https://www.googleapis.com https://accounts.google.com https://openrouter.ai; frame-src https://accounts.google.com; worker-src blob:; object-src 'none'; base-uri 'none'; form-action 'none'">
+<!-- CSP (10 Nov 2026): lane only. connect-src is this site (routing.json), the hub gate, Drive (save/pack) and Google sign-in. Nothing else can be called, so an injected script cannot send captions anywhere new. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' https://accounts.google.com; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' https://hub.taile4cbbe.ts.net:8444 https://www.googleapis.com https://accounts.google.com; frame-src https://accounts.google.com; worker-src blob:; object-src 'none'; base-uri 'none'; form-action 'none'">
 <title>Sidekick Live</title>
 <style>
 :root{--bg:#fff;--fg:#1d1d1f;--muted:#6b6b70;--line:#e3e3e6;--card:#fafafb;--ok:#127a3e;--warn:#9a6a00;--bad:#b3261e;--hot:#fff4d6;--chip:#f0f0f3;--accent:#2457c5}
@@ -54,22 +54,27 @@ a.bm{display:inline-block;padding:7px 12px;border-radius:8px;background:var(--ch
 .seg button.on{background:var(--accent);color:#fff;font-weight:600}
 #laneBar,#testBar{display:none;padding:8px 12px;border-radius:10px;margin-bottom:10px;font-weight:600;background:var(--hot);border:1px solid var(--warn);color:var(--fg)}
 #laneBar.bad{background:var(--bad);color:#fff}
+#tabBar{display:none;background:var(--bad);color:#fff;padding:8px 12px;border-radius:10px;margin-bottom:10px;font-weight:600}
+#resumeBar{display:none;background:var(--hot);border:1px solid var(--warn);color:var(--fg);padding:8px 12px;border-radius:10px;margin-bottom:10px;font-weight:600}
+#saveAsk{display:none;gap:8px;align-items:center;flex-wrap:wrap;margin-top:8px;padding:8px;border:1px solid var(--warn);border-radius:10px;background:var(--hot)}
 </style>
 </head>
 <body>
 <main>
 <header>
  <h1>Sidekick Live</h1>
- <span class="pill" id="capPill">Captions: waiting</span>
+ <span class="pill" id="capPill">Captions: waiting. Click inside the Teams side, then click the Sidekick bookmark</span>
  <span class="pill" id="packPill">Pack: not loaded</span>
  <button id="packBtn" class="packbtn" title="Reload the context pack and call sheets from Drive">Load pack from Drive</button>
  <span class="pill" id="aiPill">AI: 0 calls today</span>
- <span class="seg" id="pathSeg" role="group" aria-label="Model path: direct | work lane"><button type="button" id="pathDirect" class="on" aria-pressed="true" title="Captions go straight to Anthropic with your own key (today's path)">direct</button><button type="button" id="pathLane" aria-pressed="false" title="Captions go through the hub's work lane (zero-retention models) over Tailscale">work lane</button></span>
  <span class="pill" id="modelPill">Answering: ?</span>
- <span class="pill" id="lanePill">Work lane: off</span>
+ <span class="pill" id="lanePill">Work lane: not checked yet</span>
  <span class="hdrlinks"><a id="shutAll">Collapse all</a> | <a id="openAll">Expand all</a></span>
 </header>
 <div id="banner"></div>
+<div id="tabBar" role="alert"></div>
+<div id="resumeBar" role="status"></div>
+<div id="tabNote" class="muted"></div>
 <div id="laneBar" role="status"></div>
 <div id="testBar" role="status"></div>
 
@@ -127,6 +132,7 @@ a.bm{display:inline-block;padding:7px 12px;border-radius:8px;background:var(--ch
 <div class="card">
  <h2>Wrap</h2>
  <div class="row"><button id="wrapBtn">Wrap this call</button><button id="copyWrap" disabled>Copy</button><button id="saveWrap" disabled>Save to Drive</button><button id="newCall">New call</button></div>
+ <div id="saveAsk" role="group" aria-label="New lines since the wrap"><span>The wrap is older than the last captions.</span><button type="button" id="saveAsIs" class="primary">1. Save as is</button><button type="button" id="saveRewrap">2. Re-wrap then save</button></div>
  <pre id="wrapOut" style="margin-top:8px" class="muted">After the call, tap Wrap: what was asked of you, what you committed to, decisions, follow-ups and tracker updates.</pre>
 </div>
 
@@ -137,17 +143,13 @@ a.bm{display:inline-block;padding:7px 12px;border-radius:8px;background:var(--ch
 
 <div class="card">
  <details id="setup"><summary>Setup and settings</summary>
-  <p><b>Bookmark (once):</b> drag this onto the Brave bookmarks bar, then click it on the Teams meeting tab after turning on live captions.</p>
-  <p><b>Every call, in this order:</b> 1) join the Teams meeting in Brave and turn on live captions; 2) click the bookmark on the Teams tab (it only feeds the Sidekick tab it opens itself); 3) put that new Sidekick tab in split view with Teams. Keep Teams visible: a hidden, minimised or fully covered Teams tab stops captions (the pill warns).</p>
+  <p><b>Bookmark (once, and again when the page says the bookmark is old):</b> drag this onto the Brave bookmarks bar.</p>
+  <p><b>Every call, in this order:</b> 1) join the Teams meeting in Brave and turn on live captions; 2) click inside the Teams side, then click the Sidekick bookmark (it opens a NEW Sidekick tab for this call and only feeds that tab; close any older Sidekick tab); 3) put that new Sidekick tab in split view with Teams. Keep Teams visible: a hidden, minimised or fully covered Teams tab stops captions (the pill warns).</p>
   <p><a class="bm" id="bm" href="#">Sidekick live</a></p>
-  <label>Anthropic API key (kept in this browser only)</label><input type="password" id="apikey">
-  <label>OpenRouter API key (optional, kept in this browser only; used only for model ids with a "/", e.g. openai/gpt-5; set a spend limit on the key)</label><input type="password" id="orkey">
-  <label>Hub key (work lane). Kept in this browser's localStorage only, in plain text. This page shares its web address with other pages on harsharma27.github.io, so paste the key only in a Sidekick-only Brave profile.</label><input type="password" id="hubkey" autocomplete="off">
+  <label>Hub key (work lane, the only model path). Kept in this browser's localStorage only, in plain text. This page shares its web address with other pages on harsharma27.github.io, so paste the key only in a Sidekick-only Brave profile.</label><input type="password" id="hubkey" autocomplete="off">
   <label>Google client ID (for the Drive pack and wraps)</label><input type="text" id="gcid">
   <label>Drive folder ID (Sidekick folder)</label><input type="text" id="gfolder">
   <label>Your name forms in captions, comma-separated</label><input type="text" id="names" placeholder="Harsh, Harsha, Sharma, Harsh">
-  <label>Fast model (is it for me?)</label><input type="text" id="mFast">
-  <label>Answer model (say-lines, brief, wrap)</label><input type="text" id="mSmart">
   <label>Daily AI call cap</label><input type="number" id="cap" min="10" max="2000">
   <div class="row" style="margin-top:10px">
    <button id="saveBtn" class="primary">Save settings</button>
@@ -155,19 +157,20 @@ a.bm{display:inline-block;padding:7px 12px;border-radius:8px;background:var(--ch
    <label style="margin:0"><input type="file" id="packFile" accept=".json" style="display:none"><span class="chip">Load pack from a file</span></label>
   </div>
   <div class="muted" id="setStatus" style="margin-top:6px"></div>
-  <div class="row" style="margin-top:6px"><button id="testBtn" type="button">Start test mode (synthetic captions)</button><span class="muted">Feeds four made-up captions through the selected path. Nothing is saved to Drive. Add ?test=1 to the address to start in test mode.</span></div>
+  <div class="row" style="margin-top:6px"><button id="testBtn" type="button">Start test mode (synthetic captions)</button><span class="muted">Feeds four made-up captions through the work lane. Nothing is saved to Drive. Add ?test=1 to the address to start in test mode, or ?test=long for about 400 made-up lines (to try a long wrap).</span></div>
   <label>Last AI reply (for troubleshooting)</label><pre id="lastReply" class="muted">None yet.</pre>
   <label>AI errors today (newest first)</label><pre id="errLog" class="muted">None.</pre>
  </details>
 </div>
-<p class="muted">Captions are read from your own Teams tab by the bookmark. Only when something is aimed at you, or you tap a button, are the recent caption lines sent with your context pack to Claude through your API key. Wraps are saved to your Drive folder only when you tap Save.</p>
+<p class="muted">Captions are read from your own Teams tab by the bookmark. Only when something is aimed at you, or you tap a button, are the recent caption lines sent through the hub's work lane (zero-retention models, the hub's client-term rules); detection and the running summary send captions only, not your context pack. If the hub cannot be reached the page stops answering for that call and says so. Wraps are saved to your Drive folder only when you tap Save.</p>
 </main>
 
 <script type="text/plain" id="bmsrc">
 (function(){
- var SK='https://harsharma27.github.io/sidekick/live.html', ORIGIN='https://harsharma27.github.io', V=12;
+ var SK='https://harsharma27.github.io/sidekick/live.html', ORIGIN='https://harsharma27.github.io', V=13;
+ if(!/(^|\.)(teams\.cloud\.microsoft|teams\.microsoft\.com|teams\.live\.com)$/.test(location.hostname)){ alert('Click inside the Teams side first, then the bookmark'); return; }
  if(window.__skcap){ try{ if(window.__skcap.v===V&&window.__skcap.w&&!window.__skcap.w.closed){ window.__skcap.w.focus(); return; } }catch(e){} clearInterval(window.__skcap.t); try{ window.__skcap.wk.terminate(); }catch(e){} try{ window.__skcap.mo.disconnect(); }catch(e){} window.__skcap=null; }
- var w=window.open(SK,'sidekick_live');
+ var w=window.open(SK,'sidekick_'+Date.now().toString(36)+Math.random().toString(36).slice(2,6));
  if(!w){ alert('Sidekick: allow pop-ups for this site, then click the bookmark again.'); return; }
  var seq=0, st={w:w,t:0,v:V}; window.__skcap=st;
  function txt(el){ return (el&&(el.innerText||el.textContent)||'').replace(/\s+/g,' ').trim(); }
@@ -203,26 +206,37 @@ a.bm{display:inline-block;padding:7px 12px;border-radius:8px;background:var(--ch
 (function(){
 'use strict';
 var $=function(id){return document.getElementById(id)};
-var S={apikey:'',orkey:'',hubkey:'',path:'direct',gcid:'',gfolder:'',names:'Harsh, Harsha, Sharma, Harsh',mFast:'claude-haiku-5-5',mSmart:'claude-sonnet-5-5',cap:200};
-// Fallback Claude models when OpenRouter fails during a call (5 Nov 2026, sk03): a call never depends on a new provider.
-var FB_FAST='claude-haiku-5-5', FB_SMART='claude-sonnet-5-5';
+var S={hubkey:'',gcid:'',gfolder:'',names:'Harsh, Harsha, Sharma, Harsh',cap:200};
 var KEY='sidekick_live';
-try{ var old=JSON.parse(localStorage.getItem('sidekick')||'null'); if(old){ S.apikey=old.apikey||''; S.gcid=old.gcid||''; S.gfolder=old.gfolder||''; } }catch(e){}
+try{ var old=JSON.parse(localStorage.getItem('sidekick')||'null'); if(old){ S.gcid=old.gcid||''; S.gfolder=old.gfolder||''; } }catch(e){}
 try{ var s=JSON.parse(localStorage.getItem(KEY)||'null'); if(s) Object.keys(s).forEach(function(k){ S[k]=s[k]; }); }catch(e){}
-['apikey','orkey','hubkey','gcid','gfolder','names','mFast','mSmart','cap'].forEach(function(k){ $(k).value=S[k]==null?'':S[k]; });
-if(S.path!=='lane') S.path='direct';   // direct is the default until the lane has passed its live test
-function saveSettings(){ ['apikey','orkey','hubkey','gcid','gfolder','names','mFast','mSmart'].forEach(function(k){ S[k]=$(k).value.trim(); }); S.cap=parseInt($('cap').value,10)||200; try{ localStorage.setItem(KEY,JSON.stringify(S)); }catch(e){} }
+// 10 Nov 2026: lane only. The keys and settings of the removed direct and third-party router paths are dropped from this browser's saved settings.
+var PURGED=false; ['apikey','orkey','path','mFast','mSmart'].forEach(function(k){ if(k in S){ delete S[k]; PURGED=true; } });
+if(PURGED){ try{ localStorage.setItem(KEY,JSON.stringify(S)); }catch(e){} }
+['hubkey','gcid','gfolder','names','cap'].forEach(function(k){ $(k).value=S[k]==null?'':S[k]; });
+function saveSettings(){ ['hubkey','gcid','gfolder','names'].forEach(function(k){ S[k]=$(k).value.trim(); }); S.cap=parseInt($('cap').value,10)||200; try{ localStorage.setItem(KEY,JSON.stringify(S)); }catch(e){} }
 $('saveBtn').onclick=function(){ saveSettings(); $('setStatus').textContent='Saved.'; };
-if(!S.apikey||!S.gcid) $('setup').open=true;
+if(!S.hubkey||!S.gcid) $('setup').open=true;
 
-function localBuilt(b){ if(!b) return '?'; var m=String(b).match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})(?::\d{2})?\s*(UTC|Z)?$/); if(!m) return b; var d=new Date(Date.UTC(+m[1],m[2]-1,+m[3],+m[4],+m[5])); return d.toLocaleString('en-CA',{weekday:'short',day:'numeric',month:'short',hour:'numeric',minute:'2-digit',hour12:true,timeZoneName:'short'}); }
+// BC time (10 Nov 2026, fix 7): BC stays on UTC-7 all year. Hours come from Intl with the America/Vancouver zone, never a hard-coded offset and never a zone-name label (ICU prints the old Pacific daylight name for UTC-7).
+function bcParts(t){
+ try{ var f=new Intl.DateTimeFormat('en-CA',{timeZone:'America/Vancouver',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}), o={}; f.formatToParts(new Date(t)).forEach(function(p){ o[p.type]=p.value; }); if(o.hour==='24') o.hour='00'; return o; }
+ catch(e){ var d=new Date(t); return {year:''+d.getFullYear(),month:pad(d.getMonth()+1),day:pad(d.getDate()),hour:pad(d.getHours()),minute:pad(d.getMinutes())}; }
+}
+function bcHM(t){ var o=bcParts(t); return o.hour+':'+o.minute; }
+function bcTime(t,withDate){
+ if(withDate){ try{ return new Date(t).toLocaleString('en-CA',{timeZone:'America/Vancouver',weekday:'short',day:'numeric',month:'short',hour:'numeric',minute:'2-digit',hour12:true})+' BC time'; }catch(e){} }
+ return bcHM(t)+' BC time';
+}
+function bcStamp(t){ var o=bcParts(t); return o.year+o.month+o.day+'-'+o.hour+o.minute; }
+function localBuilt(b){ if(!b) return '?'; var m=String(b).match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})(?::\d{2})?\s*(UTC|Z)?$/); if(!m) return b; return bcTime(Date.UTC(+m[1],m[2]-1,+m[3],+m[4],+m[5]),true); }
 // bookmarklet
 $('bm').href='javascript:'+encodeURIComponent($('bmsrc').textContent.trim());
 $('bm').onclick=function(e){ e.preventDefault(); alert('Drag this button to the bookmarks bar, then click it on the Teams tab.'); };
 
 function banner(m){ var b=$('banner'); if(!m){ b.style.display='none'; return; } b.textContent=m; b.style.display='block'; }
 function pad(n){return (n<10?'0':'')+n}
-function clock(t){var d=new Date(t);return pad(d.getHours())+':'+pad(d.getMinutes())}
+function clock(t){ return bcHM(t); }
 function norm(s){ return (s||'').toLowerCase().replace(/[^a-z0-9 ]/g,' ').replace(/\s+/g,' ').trim(); }
 function el(tag,cls,text){ var e=document.createElement(tag); if(cls) e.className=cls; if(text!=null) e.textContent=text; return e; }
 
@@ -266,7 +280,7 @@ function loadCallsFromDrive(){
  var q=encodeURIComponent("'"+S.gfolder+"' in parents and name contains 'sidekick-calls' and trashed=false&orderBy=createdTime desc".split('&')[0]);
  return gfetch('https://www.googleapis.com/drive/v3/files?q='+q+'&orderBy=createdTime%20desc&fields=files(id,name)')
   .then(function(r){return r.json()}).then(function(j){ var f=j.files&&j.files[0]; if(!f) return null; return gfetch('https://www.googleapis.com/drive/v3/files/'+f.id+'?alt=media').then(function(r){return r.json()}); })
-  .then(function(c){ if(c&&c.calls&&PACK){ PACK.calls=c.calls; PACK.callsBuilt=c.built||''; try{ localStorage.setItem(KEY+'_pack',JSON.stringify(PACK)); }catch(e){} callId=''; renderCall(); $('setStatus').textContent='Pack and '+c.calls.length+' call sheets loaded.'; } })
+  .then(function(c){ if(c&&c.calls&&PACK){ PACK.calls=c.calls; PACK.callsBuilt=c.built||''; try{ localStorage.setItem(KEY+'_pack',JSON.stringify(PACK)); }catch(e){} callId=''; renderCall(); $('setStatus').textContent='Pack and '+c.calls.length+' call sheets loaded (call sheets built '+localBuilt(PACK.callsBuilt)+').'; } })
   .catch(function(e){ banner('Call sheets not loaded: '+e.message); });
 }
 function loadPackFromDrive(){
@@ -298,7 +312,8 @@ window.addEventListener('message',function(ev){
 });
 function ingest(m){
  if(!m||m.sk!=='cap1') return;
- if(!lines.length && laneOn() && Date.now()-lastProbe>20000) probeLane('meeting');   // meeting start: check the hub is there before the first question
+ if(!lines.length && Date.now()-lastProbe>20000) probeLane('meeting');   // meeting start: check the hub is there before the first question
+ var gap=lastMsg?Date.now()-lastMsg:0; if(lines.length && gap>1200000) showResume(Math.round(gap/60000));
  lastMsg=Date.now(); noteTeamsView(m);
  (m.caps||[]).forEach(function(c){
   if(!cur[c.id] && oldSig[sig(c.author,c.text)]) return; // caption still on the Teams screen from before New call
@@ -320,10 +335,10 @@ function transcript(n){ return lines.slice(-(n||40)).map(function(L){ return '['
 // Capture health (6 Nov 2026): Chrome stops drawing a hidden or covered Teams tab, so its caption list
 // stalls and lines are lost (3-4 min gaps on the 5 Nov PBR and 6 Nov DSM). Bookmark v12+ reports
 // document.hidden; warn while Teams is hidden and record the spans in the saved transcript.
-var capV=0, teamsHidden=false, hiddenSince=0, hiddenSpans=[], oldBmWarned=false;
+var capV=0, capMode='', teamsHidden=false, hiddenSince=0, hiddenSpans=[], oldBmWarned=false;
 function noteTeamsView(m){
- capV=m.v||0;
- if(capV<12 && !oldBmWarned){ oldBmWarned=true; banner('Update the Sidekick bookmark (drag it to the bookmarks bar again) to get the "Teams hidden" warning.'); }
+ capV=m.v||0; capMode=m.mode||'';
+ if(capV<13 && !oldBmWarned){ oldBmWarned=true; banner('Old Sidekick bookmark (v'+(capV||'?')+'): re-drag the bookmark from Setup to the bookmarks bar, then click it once inside the Teams side.'); }
  var h=(m.hidden===true);
  if(h && !teamsHidden){ teamsHidden=true; hiddenSince=Date.now(); }
  else if(!h && teamsHidden){ teamsHidden=false; hiddenSpans.push({from:hiddenSince,to:Date.now()}); }
@@ -334,12 +349,34 @@ function captureHealth(){
  for(var i=1;i<lines.length;i++){ var g=lines[i].t-lines[i-1].t; if(g>60000) gaps.push(clock(lines[i-1].t)+'-'+clock(lines[i].t)); }
  return '--- capture health: bookmark v'+(capV||'?')+(capV<12?' (old: no hidden-Teams report)':'')+'; Teams hidden '+spans.length+' time(s), '+Math.round(tot/60000)+' min total'+(spans.length?' ('+spans.map(function(x){ return clock(x.from)+'-'+clock(x.to); }).join(', ')+')':'')+'; caption gaps over 60 s: '+(gaps.length?gaps.join(', '):'none');
 }
+// ---------- other Sidekick tabs (10 Nov 2026, fix 6) ----------
+// The bookmark opens a Sidekick tab with a unique window name per launch; a BroadcastChannel heartbeat (tab id, opened time, fed flag: never caption text) tells each tab about the others,
+// so captions going to a different tab are visible. The channel is shared by every page on this web address, so a message is checked for shape before use.
+var TABID=Math.random().toString(36).slice(2,8), TAB_OPENED=Date.now(), others={}, lastBeat=0, bc=null, pageStart=Date.now();
+function fedNow(){ return !!lastMsg && Date.now()-lastMsg<15000; }
+try{ bc=new BroadcastChannel('sidekick_tabs'); bc.onmessage=function(ev){ var m=ev.data; if(!m||m.sk!=='tab1'||typeof m.id!=='string'||m.id===TABID) return; if(m.closing) delete others[m.id]; else others[m.id]={opened:+m.opened||0,fed:m.fed===true,seen:Date.now()}; renderTabs(); }; }catch(e){ bc=null; }
+function beat(){ if(!bc) return; try{ bc.postMessage({sk:'tab1',id:TABID,opened:TAB_OPENED,fed:fedNow()}); }catch(e){} }
+try{ window.addEventListener('pagehide',function(){ if(bc){ try{ bc.postMessage({sk:'tab1',id:TABID,closing:true}); }catch(e){} } }); }catch(e){}
+function renderTabs(){
+ var now=Date.now(), act=[]; Object.keys(others).forEach(function(k){ if(now-others[k].seen>15000) delete others[k]; else act.push(others[k]); });
+ if(act.length+1>mt.tabsMax) mt.tabsMax=act.length+1;
+ var fedOther=act.filter(function(o){ return o.fed; }).sort(function(a,b){ return a.opened-b.opened; })[0], bar=$('tabBar');
+ if(!fedNow() && fedOther){ bar.textContent='Captions are going to ANOTHER Sidekick tab (opened '+bcTime(fedOther.opened)+'). Use that tab, or close it and click the bookmark again.'; bar.style.display='block'; }
+ else bar.style.display='none';
+ $('tabNote').textContent=act.length?(act.length+' other Sidekick tab'+(act.length>1?'s':'')+' open'):'';
+}
+// Captions resuming after more than 20 minutes while the old call's lines are still here: probably a new call.
+function showResume(min){ var b=$('resumeBar'); b.textContent='Captions resumed after '+min+' min and the old call is still here. New call? Tap New call.'; b.style.display='block'; }
+function hideResume(){ var b=$('resumeBar'); if(b){ b.style.display='none'; b.textContent=''; } }
 // a line is settled when Teams stops changing it for 2.5 s
 function tick(){
  var age=lastMsg?Math.round((Date.now()-lastMsg)/1000):-1;
- var p=$('capPill');
- if(age<0){ p.textContent='Captions: waiting for the bookmark'; p.className='pill warn'; }
+ var p=$('capPill'), nowT=Date.now();
+ if(nowT-lastBeat>=5000){ lastBeat=nowT; beat(); }
+ renderTabs();
+ if(age<0){ p.textContent='Captions: waiting. Click inside the Teams side, then click the Sidekick bookmark'+(nowT-pageStart>60000?' (in split view, click inside the Teams pane first, then the bookmark)':''); p.className='pill warn'; }
  else if(age<5 && teamsHidden){ var hs=Math.round((Date.now()-hiddenSince)/1000); p.textContent='Captions: Teams hidden '+hs+' s, keep the Teams tab visible'; p.className='pill bad'; }
+ else if(age<5 && capMode==='none'){ p.textContent='Bookmark connected, no captions on Teams: turn on live captions'; p.className='pill warn'; }
  else if(age<5){ p.textContent='Captions: live'; p.className='pill ok'; }
  else { p.textContent='Captions: no update '+age+' s'; p.className='pill bad'; }
  var now=Date.now();
@@ -353,13 +390,13 @@ try{ tickWorker=new Worker(URL.createObjectURL(new Blob(['setInterval(function()
 // ---------- running call summary (so the buttons know the whole call, not just the last minute) ----------
 var callSum='', sumAt=0, sumLines=0, sumBusy=false;
 function maybeSummarize(force){
- if(sumBusy||!(S.apikey||laneReady())) return;
+ if(sumBusy||!laneReady()) return;
  var fresh=lines.length-sumLines;
  if(!force && !(fresh>=50 || (fresh>=10 && Date.now()-sumAt>240000))) return;
  if(!lines.length) return;
  sumBusy=true;
  var q='Full caption transcript so far (newest last; captions can mishear words):\n'+transcript(400)+'\n\nSummarise the call so far for Harsh, who is listening. Plain text, under 180 words, these labels:\nTOPIC NOW: what is being discussed in the last few minutes (story numbers if said).\nEARLIER: topics already covered, one line each.\nDECISIONS: agreed outcomes, who owns them.\nASKED OF HARSH: anything put to Harsh by name or to the group he is part of, with who asked and roughly when; "none" if none.\nOPEN QUESTIONS: questions raised and not answered yet, with who asked.\nUse only what the captions say; mark unclear parts (as heard).';
- claudeAs('fast',q,700,{noSheet:true,task:'summary'}).then(function(t){ callSum=t; sumAt=Date.now(); sumLines=lines.length; var b=$('sumBox'); if(b) b.textContent=t; }).catch(function(e){ logErr('summary: '+e.message); sumAt=Date.now(); sumLines=lines.length; }).then(function(){ sumBusy=false; });
+ claudeAs('fast',q,700,{ctx:'captions',task:'summary'}).then(function(t){ callSum=t; sumAt=Date.now(); sumLines=lines.length; var b=$('sumBox'); if(b) b.textContent=t; }).catch(function(e){ logErr('summary: '+e.message); sumAt=Date.now(); sumLines=lines.length; }).then(function(){ sumBusy=false; });
 }
 function liveContext(n){
  return (callSum?'CALL SO FAR (running summary, may lag a few minutes):\n'+callSum+'\n\n':'')+'Recent captions (newest last):\n'+(lines.length?transcript(n||80):'(no captions yet)');
@@ -440,35 +477,65 @@ var RULES='You support Harsh during a live Illumina CMCM Field Service work call
  'Stay in his lane as a junior BSA: functional scope, FR status, what he has checked, who he is waiting on. Never volunteer him for development, QA execution, root cause diagnosis or another owner\'s decision. '+
  'Exception, PLATFORM MODE only (the request says so): you may explain how Salesforce or ServiceMax works from general platform knowledge, plus any checked org facts in the pack "platform" list. Label general knowledge as such, say what to check in QA, and still never invent Illumina status, owners, dates or decisions. '+
  'Spoken lines follow his voice: plain, polite, short sentences, full CMCM- prefix on story numbers, no em dashes, no jargon he would not use.';
+// Captions-only context (10 Nov 2026, fix 2): detection and the running summary never need the context pack or a call sheet.
+// They get only Harsh's name forms and his story keys, so each call is a few thousand tokens, not 30k, and no client pack leaves the page for them.
+var RULES_CAP='You support Harsh during a live Illumina CMCM Field Service work call. You get a Teams live-caption transcript with speaker names (captions can mishear words). Work only from the transcript: you have no tracker or pack in this task. Never invent status, owners, dates or decisions. Reply in exactly the format the request asks for, nothing else.';
+function captionsContext(){
+ var keys=Object.keys(storyDigits).map(function(n){ return 'CMCM-'+n; });
+ return RULES_CAP+'\n\nHARSH NAME FORMS (as they may appear in captions): '+(myNames().join(', ')||'Harsh')+'.\nHIS STORY KEYS: '+(keys.join(', ')||'none loaded')+'.';
+}
 var usage=loadUsage(), lastReply='';
 function today(){ var d=new Date(); return d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate()); }
 function loadUsage(){ try{ var u=JSON.parse(localStorage.getItem(KEY+'_usage')||'null'); if(u&&u.day===today()){ if(u.fails==null){ u.fails=0; if(!u.inTok&&!u.cacheTok&&!u.outTok){ u.fails=u.calls; u.calls=0; } } return u; } }catch(e){} return {day:today(),calls:0,fails:0,inTok:0,cacheTok:0,outTok:0}; } // older versions counted failed calls toward the cap
-var failRun=0, pausedUntil=0, lastAIErr='', orFail=0, orDown=false;
-function renderUsage(){ var paused=Date.now()<pausedUntil; $('aiPill').textContent='AI: '+usage.calls+' calls today ('+Math.round((usage.inTok+usage.cacheTok)/1000)+'k in, '+Math.round(usage.outTok/1000)+'k out)'+((usage.orIn||usage.orOut)?', OpenRouter '+Math.round((usage.orIn||0)/1000)+'k in':'')+(orDown?', OpenRouter down: using Claude':'')+((usage.fails||0)?', '+usage.fails+' failed':'')+(paused?' | PAUSED: '+lastAIErr:''); $('aiPill').className='pill'+((usage.calls>=S.cap||paused)?' bad':''); }
+var failRun=0, pausedUntil=0, lastAIErr='';
+function renderUsage(){ var paused=Date.now()<pausedUntil; $('aiPill').textContent='AI: '+usage.calls+' calls today ('+Math.round((usage.inTok+usage.cacheTok)/1000)+'k in, '+Math.round(usage.outTok/1000)+'k out)'+((usage.fails||0)?', '+usage.fails+' failed':'')+(paused?' | PAUSED: '+lastAIErr:''); $('aiPill').className='pill'+((usage.calls>=S.cap||paused)?' bad':''); }
 renderUsage();
 var errLog=[];
-function logErr(m){ errLog.push(clock(Date.now())+'  '+m); var el2=$('errLog'); if(el2) el2.textContent=errLog.slice().reverse().join('\n'); }
-// ---------- work lane (9 Nov 2026, hub review 2026-11-09-sidekick-door): OpenAI-format calls through the hub's door gate ----------
-// DEFAULT is direct (the path above). The work lane is a visible toggle in the header. Calls go to the gate over the tailnet (zero-retention models, the hub's client-term rules).
-// Fallback to the direct Anthropic path happens ONLY on a transport failure (network error, DNS, gate 502/504, no first byte by the deadline, upstream 5xx whose body is not a
-// `refused:` reply), once per meeting, with a banner. A `refused:` reply is NEVER retried elsewhere: it is shown as "blocked by the work-lane rule" or "switched off".
+// Per-meeting counters for the call-health footer (10 Nov 2026, fix 4). Counts, times, models, tokens, cost and error classes only: never caption text.
+var PAGE_V='2026-11-10.1';
+function newMeeting(){ return {start:Date.now(),calls:{},ok:0,fail:0,retries:0,cutRetries:0,stops:0,models:{},groups:{},cost:0,costKnown:0,noPrice:false,errs:[],tabsMax:1}; }
+var mt=newMeeting();
+function logErr(m){ errLog.push(clock(Date.now())+'  '+m); mt.errs.push(clock(Date.now())+' '+clip(m,120)); if(mt.errs.length>40) mt.errs.shift(); var el2=$('errLog'); if(el2) el2.textContent=errLog.slice().reverse().join('\n'); }
+function noteCall(task,group,res){
+ var t=task||'other'; mt.calls[t]=(mt.calls[t]||0)+1; mt.ok++;
+ if(res.model) mt.models[res.model]=(mt.models[res.model]||0)+1;
+ var g=mt.groups[group]||(mt.groups[group]={calls:0,inTok:0,cached:0,outTok:0}), fresh=Math.max(0,res.inTok-res.cached);
+ g.calls++; g.inTok+=fresh; g.cached+=res.cached; g.outTok+=res.outTok;
+ if(typeof res.cost==='number'&&isFinite(res.cost)){ mt.cost+=res.cost; mt.costKnown++; }
+ else { var pr=(ROUTING.prices||{})[group]; if(pr) mt.cost+=(fresh*pr.in+res.cached*pr.cached+res.outTok*pr.out)/1e6; else mt.noPrice=true; }
+}
+function callHealth(){
+ var calls=Object.keys(mt.calls).sort().map(function(k){ return k+' '+mt.calls[k]; }).join(', ')||'none';
+ var models=Object.keys(mt.models).sort().map(function(k){ return k+' x'+mt.models[k]; }).join(', ')||'none';
+ var grp=Object.keys(mt.groups).sort().map(function(k){ var g=mt.groups[k]; return k+': '+g.inTok+' in, '+g.cached+' cached, '+g.outTok+' out'; }).join('; ')||'none';
+ var errs=mt.errs.slice(-8), n=lines.length;
+ return '--- call health (page '+PAGE_V+', bookmark v'+(capV||'?')+'; times in BC time) ---\n'+
+  'call: '+(n?bcTime(lines[0].t)+' to '+bcTime(lines[n-1].t):'no captions')+'; '+n+' caption lines; footer written '+bcTime(Date.now())+'\n'+
+  'AI calls ok: '+mt.ok+' ('+calls+'); failed attempts: '+mt.fail+'; cut-short retries: '+mt.cutRetries+'; other retries: '+mt.retries+'; work-lane stops: '+mt.stops+'\n'+
+  'models: '+models+'\n'+
+  'tokens by group: '+grp+'\n'+
+  'est. cost: US$'+mt.cost.toFixed(3)+(mt.costKnown?' ('+mt.costKnown+' call(s) priced by the hub)':'')+(mt.noPrice?' (a group had no price)':'')+'\n'+
+  'alerts raised: '+alertLog.length+'; Sidekick tabs seen: '+mt.tabsMax+'\n'+
+  'errors: '+mt.errs.length+(errs.length?'\n  '+errs.join('\n  '):'');
+}
+// ---------- work lane (9 Nov 2026, hub review 2026-11-09-sidekick-door; lane only since 10 Nov 2026) ----------
+// Every model call goes through the hub's door gate over the tailnet (zero-retention models, the hub's client-term rules). There is NO other path and NO fallback
+// (Standing Instructions s.3 MEETING SIDEKICK, 9 Nov): when the hub cannot be reached the page says so and stops answering for that call. A `refused:` reply is shown as such.
 var GATE='https://hub.taile4cbbe.ts.net:8444';
 var ALLOWED_GROUPS={'work-fallback':1,'work-sonnet':1};   // the only groups the hub's sidekick key may use; never the auto router
 // Built-in copy of routing.json (tests/lane_static_test.py fails if the two differ). routing.json is fetched at start and wins when it is valid.
-var DEFAULT_ROUTING={"version":1,"probe_ms":6000,"default":{"group":"work-sonnet","first_byte_ms":12000,"max_tokens":1500},"tasks":{"detect":{"group":"work-fallback","first_byte_ms":6000,"max_tokens":600},"summary":{"group":"work-fallback","first_byte_ms":8000,"max_tokens":1000},"room":{"group":"work-sonnet","first_byte_ms":12000,"max_tokens":1500},"answer":{"group":"work-sonnet","first_byte_ms":12000,"max_tokens":1500},"brief":{"group":"work-sonnet","first_byte_ms":12000,"max_tokens":2000},"wrap":{"group":"work-sonnet","first_byte_ms":20000,"max_tokens":4000}}};
-var ROUTING=DEFAULT_ROUTING, TESTMODE=/[?&]test=1(&|$)/.test(location.search);
-var laneDown=false, fbMeeting=0, fbPending=0, lastProbe=0, lastModel='';
-try{ fbPending=Math.max(0,parseInt(localStorage.getItem(KEY+'_fb')||'0',10)||0); }catch(e){}
+var DEFAULT_ROUTING={"version":1,"probe_ms":6000,"default":{"group":"work-sonnet","first_byte_ms":12000,"max_tokens":1500},"tasks":{"detect":{"group":"work-fallback","first_byte_ms":6000,"max_tokens":600},"summary":{"group":"work-fallback","first_byte_ms":8000,"max_tokens":1000},"room":{"group":"work-sonnet","first_byte_ms":12000,"max_tokens":1500},"answer":{"group":"work-sonnet","first_byte_ms":12000,"max_tokens":1500},"brief":{"group":"work-sonnet","first_byte_ms":12000,"max_tokens":2000},"wrap":{"group":"work-sonnet","first_byte_ms":20000,"max_tokens":12000}},"prices":{"work-sonnet":{"in":2,"cached":0.2,"out":10},"work-fallback":{"in":1,"cached":0.1,"out":5}}};
+var ROUTING=DEFAULT_ROUTING, TESTLONG=/[?&]test=long(&|$)/.test(location.search), TESTMODE=/[?&]test=(1|long)(&|$)/.test(location.search);
+var laneDown=false, lastProbe=0, lastModel='';
 function persistS(){ try{ localStorage.setItem(KEY,JSON.stringify(S)); }catch(e){} }
-function persistFb(){ try{ localStorage.setItem(KEY+'_fb',String(fbPending)); }catch(e){} }
-function laneOn(){ return S.path==='lane'; }
-function laneActive(){ return laneOn() && !laneDown; }
-function laneReady(){ return laneActive() && !!S.hubkey; }
-function okRoute(r){ return r && ALLOWED_GROUPS[r.group]===1 && r.first_byte_ms>=1000 && r.first_byte_ms<=60000 && r.max_tokens>=100 && r.max_tokens<=8000; }
+function laneReady(){ return !laneDown && !!S.hubkey; }
+function okRoute(r){ return r && ALLOWED_GROUPS[r.group]===1 && r.first_byte_ms>=1000 && r.first_byte_ms<=60000 && r.max_tokens>=100 && r.max_tokens<=16000; }
+function okPrices(p){ if(p==null) return true; if(typeof p!=='object') return false; return Object.keys(p).every(function(g){ var v=p[g]; return ALLOWED_GROUPS[g]===1 && v && ['in','cached','out'].every(function(k){ return typeof v[k]==='number' && isFinite(v[k]) && v[k]>=0 && v[k]<=1000; }); }); }
 function validateRouting(j){
  if(!j||j.version!==1||!okRoute(j.default)||!j.tasks||typeof j.tasks!=='object') return null;
  var tasks=Object.keys(j.tasks); for(var i=0;i<tasks.length;i++){ if(!okRoute(j.tasks[tasks[i]])) return null; }
  if(!(j.probe_ms>=1000&&j.probe_ms<=30000)) return null;
+ if(!okPrices(j.prices)) return null;
  return j;
 }
 function loadRouting(){
@@ -479,16 +546,10 @@ function clip(s,n){ s=String(s==null?'':s); return s.length>(n||200)?s.slice(0,n
 function setLanePill(text,cls){ var p=$('lanePill'); p.textContent=text; p.className='pill'+(cls?' '+cls:''); }
 function setLaneBar(text,cls){ var b=$('laneBar'); if(!text){ b.style.display='none'; b.textContent=''; return; } b.textContent=text; b.className=cls||''; b.style.display='block'; }
 function renderPath(){
- var lane=laneOn();
- $('pathDirect').className=lane?'':'on'; $('pathLane').className=lane?'on':''; $('pathDirect').setAttribute('aria-pressed',lane?'false':'true'); $('pathLane').setAttribute('aria-pressed',lane?'true':'false');
- var txt;
- if(lane&&!laneDown) txt='Answering: '+routeFor('answer').group+' (detect: '+routeFor('detect').group+')';
- else if(lane) txt='Answering: '+S.mSmart+' (direct, work lane down this meeting)';
- else txt='Answering: '+S.mSmart+' (direct)';
- var mp=$('modelPill'); mp.textContent=txt+(lastModel?' | last: '+lastModel:''); mp.className='pill'+(lane&&laneDown?' warn':'');
- if(!lane) setLanePill('Work lane: off','');
+ var txt=laneDown?'Work lane unreachable: stopped for this call':'Answering: '+routeFor('answer').group+' (detect: '+routeFor('detect').group+')';
+ var mp=$('modelPill'); mp.textContent=txt+(lastModel?' | last: '+lastModel:''); mp.className='pill'+(laneDown?' bad':'');
 }
-// A refusal is the hub's own rule talking: never a reason to try another path.
+// A refusal is the hub's own rule talking: shown as such, never retried.
 function isRefusal(s){ return /refused:/i.test(String(s==null?'':s).slice(0,800)); }
 function refusalKind(s){ return /kill switch|switched off|monthly cap|budget|is reached/i.test(String(s)) ? 'switched off' : 'blocked by the work-lane rule'; }
 function bodyMessage(tx){ try{ var j=JSON.parse(tx); var m=(j.error&&(j.error.message||j.error))||j.detail||j.message; return typeof m==='string'?m:JSON.stringify(m); }catch(e){ return String(tx||''); } }
@@ -503,16 +564,17 @@ function laneError(status,tx,retryAfter){
  else er=new Error('Work lane HTTP '+status+' ('+clip(msg,120)+')');
  er.retry=false; return er;
 }
-function laneFallback(reason){
- if(!laneDown){ laneDown=true; fbMeeting++; fbPending++; persistFb(); }
+// The hub cannot be reached: stop answering for this call, visibly. Nothing is sent anywhere else. New call tries the hub again.
+function laneStop(reason){
+ if(!laneDown){ laneDown=true; mt.stops++; }
  setLanePill('Work lane: down','bad');
- setLaneBar('Work lane unreachable ('+reason+'). Answering DIRECT through Anthropic for the rest of this meeting. Fallbacks the hub has not heard about yet: '+fbPending+'. New call tries the lane again.','warn');
+ setLaneBar('Work lane unreachable: stopped for this call ('+reason+'). Nothing is being answered. Tap New call to try the hub again.','bad');
  renderPath();
 }
-function laneNewMeeting(){ laneDown=false; fbMeeting=0; setLaneBar(''); renderPath(); if(laneOn()) probeLane('meeting'); }
+function laneNewMeeting(){ laneDown=false; setLaneBar(''); renderPath(); probeLane('meeting'); }
 // Streaming reader for an OpenAI-format Server-Sent-Events reply. onFirst runs on the first chunk (the first-byte deadline stops there).
 function readStream(r,onFirst){
- var out={text:'',finish:'',model:'',inTok:0,outTok:0,cached:0}, buf='', raw='', failed=null, dec=(typeof TextDecoder!=='undefined')?new TextDecoder():null;
+ var out={text:'',finish:'',model:'',inTok:0,outTok:0,cached:0,cost:null}, buf='', raw='', failed=null, dec=(typeof TextDecoder!=='undefined')?new TextDecoder():null;
  function feed(s){
   if(raw.length<200000) raw+=s; buf+=s; var parts=buf.split('\n'); buf=parts.pop();
   parts.forEach(function(l){
@@ -524,7 +586,7 @@ function readStream(r,onFirst){
  function take(j){
   if(j.model) out.model=j.model;
   var c=(j.choices||[])[0]; if(c){ var dl=c.delta||c.message||{}; if(typeof dl.content==='string') out.text+=dl.content; if(c.finish_reason) out.finish=c.finish_reason; }
-  if(j.usage){ var u=j.usage; out.inTok=u.prompt_tokens||out.inTok; out.outTok=u.completion_tokens||out.outTok; out.cached=((u.prompt_tokens_details||{}).cached_tokens)||out.cached; }
+  if(j.usage){ var u=j.usage; out.inTok=u.prompt_tokens||out.inTok; out.outTok=u.completion_tokens||out.outTok; out.cached=((u.prompt_tokens_details||{}).cached_tokens)||out.cached; if(typeof u.cost==='number') out.cost=u.cost; }
  }
  function finish(){
   if(buf.trim()) feed('\n');
@@ -537,25 +599,33 @@ function readStream(r,onFirst){
  function pump(){ return rd.read().then(function(x){ if(x.done){ feed(dec.decode()); return finish(); } onFirst(); feed(dec.decode(x.value,{stream:true})); if(failed) throw failed; return pump(); }); }
  return pump();
 }
-function laneOnce(task,userText,maxTok,tmo,opts){
- var rt=routeFor(task), sys=RULES; if(PACK) sys+='\n\nCONTEXT PACK (built '+(PACK.built||'?')+'):\n'+JSON.stringify(PACK);
+function laneSystem(opts){
+ if(opts&&opts.ctx==='captions') return captionsContext();   // detect and summary: no pack, no call sheet
+ var sys=RULES; if(PACK) sys+='\n\nCONTEXT PACK (built '+(PACK.built||'?')+'):\n'+JSON.stringify(PACK);
  var cst=(opts&&opts.noSheet)?'':callSheetText(); if(cst) sys+='\n\n'+cst;
+ return sys;
+}
+function laneOnce(task,userText,maxTok,tmo,opts){
+ var rt=routeFor(task), sys=laneSystem(opts);
  var ctl=new AbortController(), got=false, t0=Date.now();
  var tTotal=setTimeout(function(){ ctl.abort(); },tmo), tFirst=setTimeout(function(){ if(!got) ctl.abort(); },rt.first_byte_ms);
  function done(){ clearTimeout(tTotal); clearTimeout(tFirst); }
  function transport(msg){ done(); var er=new Error(msg); er.laneTransport=true; er.retry=true; return er; }
- var headers={'content-type':'application/json','authorization':'Bearer '+S.hubkey,'x-sk-fallbacks':String(fbPending)};
- var body=JSON.stringify({model:rt.group,max_tokens:maxTok,stream:true,stream_options:{include_usage:true},messages:[{role:'system',content:sys},{role:'user',content:userText}]});
+ var headers={'content-type':'application/json','authorization':'Bearer '+S.hubkey,'x-sk-fallbacks':'0'};
+ var req={model:rt.group,max_tokens:maxTok,stream:true,stream_options:{include_usage:true},messages:[{role:'system',content:sys},{role:'user',content:userText}]};
+ if(task) req.metadata={hub_task:'sidekick-'+task};   // so the door log names the Sidekick task (the gate forwards metadata)
+ var body=JSON.stringify(req);
  return fetch(GATE+'/v1/chat/completions',{method:'POST',signal:ctl.signal,headers:headers,body:body}).then(function(r){
   if(!r.ok) return r.text().then(function(tx){ done(); throw laneError(r.status,tx,r.headers.get('retry-after')); },function(){ done(); throw laneError(r.status,'',null); });
   return readStream(r,function(){ if(!got){ got=true; clearTimeout(tFirst); lastTtfb=Date.now()-t0; } }).then(function(res){
-   done(); fbPending=0; persistFb(); setLanePill('Work lane: ok ('+rt.group+', first byte '+lastTtfb+' ms)','ok');
+   done(); setLanePill('Work lane: ok ('+rt.group+', first byte '+lastTtfb+' ms)','ok');
    usage.calls++; usage.laneCalls=(usage.laneCalls||0)+1; usage.inTok+=Math.max(0,res.inTok-res.cached); usage.cacheTok+=res.cached; usage.outTok+=res.outTok;
+   noteCall(task,rt.group,res);
    return finishReply('Work lane',res.model||rt.group,res.finish,'text',res.outTok,res.text,res.finish==='length');
   },function(e){
    done(); if(e.refused||e.laneTransport||e.retry!=null) throw e;
    if(!got) throw transport('no first byte within '+rt.first_byte_ms+' ms');
-   var er=new Error('Work lane: the reply broke off ('+clip(e.message,80)+')'); er.retry=true; throw er;   // after the first byte: retried on the same path, not a fallback
+   var er=new Error('Work lane: the reply broke off ('+clip(e.message,80)+')'); er.retry=true; throw er;   // after the first byte: retried on the same path
   });
  },function(e){
   if(e.name==='AbortError'||e instanceof TypeError){ if(!got) throw transport(e.name==='AbortError'?'no first byte within '+rt.first_byte_ms+' ms':'network error or the hub cannot be reached'); done(); var er=new Error('The AI request timed out.'); er.retry=true; throw er; }
@@ -563,31 +633,26 @@ function laneOnce(task,userText,maxTok,tmo,opts){
  });
 }
 var lastTtfb=0;
-// Health probe (GET /v1/models) at page start, when the toggle is switched to the lane and at the start of each meeting.
+// Health probe (GET /v1/models) at page start and at the start of each meeting.
 function probeLane(why){
- if(!laneOn()||!S.hubkey) return Promise.resolve();
+ if(!S.hubkey) return Promise.resolve();
  if(laneDown) return Promise.resolve();
  lastProbe=Date.now(); setLanePill('Work lane: checking...','warn');
  var ctl=new AbortController(), tm=setTimeout(function(){ ctl.abort(); },ROUTING.probe_ms);
- return fetch(GATE+'/v1/models',{headers:{'authorization':'Bearer '+S.hubkey,'x-sk-fallbacks':String(fbPending)},signal:ctl.signal}).then(function(r){
+ return fetch(GATE+'/v1/models',{headers:{'authorization':'Bearer '+S.hubkey,'x-sk-fallbacks':'0'},signal:ctl.signal}).then(function(r){
   return r.text().then(function(tx){
    clearTimeout(tm);
    if(r.ok){
-    fbPending=0; persistFb(); var ids=[]; try{ ids=(JSON.parse(tx).data||[]).map(function(m){ return m.id; }); }catch(e){}
+    var ids=[]; try{ ids=(JSON.parse(tx).data||[]).map(function(m){ return m.id; }); }catch(e){}
     var need=Object.keys(ALLOWED_GROUPS).filter(function(g){ return ids.indexOf(g)<0; });
     if(need.length) setLanePill('Work lane: reachable, but missing '+need.join(', '),'warn'); else setLanePill('Work lane: reachable ('+ids.length+' models)','ok');
     return;
    }
    var er=laneError(r.status,tx,r.headers.get('retry-after'));
-   if(er.laneTransport) return laneFallback('health check: '+er.message);
+   if(er.laneTransport) return laneStop('health check: '+er.message);
    setLanePill('Work lane: '+(er.refused?er.message.replace(/^Work lane: /,''):er.message.replace(/^Work lane:? ?/,'')),'bad');
   });
- },function(){ clearTimeout(tm); laneFallback('health check: the hub did not answer within '+ROUTING.probe_ms+' ms'); });
-}
-function setPath(p){
- if(p==='lane'&&!S.hubkey){ setLaneBar('Add the hub key in Setup before using the work lane.','warn'); $('setup').open=true; return; }
- S.path=(p==='lane')?'lane':'direct'; persistS(); laneDown=false; setLaneBar(''); renderPath();
- if(laneOn()) probeLane('switch');
+ },function(){ clearTimeout(tm); laneStop('health check: the hub did not answer within '+ROUTING.probe_ms+' ms'); });
 }
 // Test mode: synthetic captions through the same path as the Teams bookmark. No client names, nothing is saved to Drive.
 var TEST_LINES=[
@@ -596,27 +661,22 @@ var TEST_LINES=[
  ['Sam Sample','Thanks. Next up is the sample dashboard.'],
  ['Alex Tester','Can someone explain how picklist order works in the sample org?']
 ];
+// ?test=long: about 400 synthetic lines (same made-up names, no client terms, no name of Harsh, no questions) to exercise the wrap size and the running summary.
+function letterCode(n){ var s=''; n=n+1; while(n>0){ n--; s=String.fromCharCode(97+(n%26))+s; n=Math.floor(n/26); } return s; }
+function feedLong(){
+ var names=['Alex Tester','Jordan Example','Sam Sample','Riley Demo'], topics=['the sample dashboard','the demo item','the synthetic release','the example layout','the sample report'], verbs=['is ready for review','needs another look','was updated this morning','is waiting on the sample owner','looks fine in the demo org'], n=0;
+ (function step(){
+  var caps=[]; for(var i=0;i<20&&n<400;i++,n++) caps.push({id:'long'+n,author:names[n%4],text:'Synthetic line '+letterCode(n)+': '+topics[n%5]+' '+verbs[(n*3)%5]+' for the demo.'});
+  ingest({sk:'cap1',v:13,caps:caps}); if(n<400) setTimeout(step,150);
+ })();
+}
 function startTest(){
  TESTMODE=true; setTestBar();
- TEST_LINES.forEach(function(l,i){ setTimeout(function(){ ingest({sk:'cap1',caps:[{id:'test'+i,author:l[0],text:l[1]}]}); },i*4000+300); });
+ if(TESTLONG){ feedLong(); return; }
+ TEST_LINES.forEach(function(l,i){ setTimeout(function(){ ingest({sk:'cap1',v:13,caps:[{id:'test'+i,author:l[0],text:l[1]}]}); },i*4000+300); });
 }
-function setTestBar(){ var b=$('testBar'); b.textContent=TESTMODE?'TEST MODE: synthetic captions, nothing is saved to Drive. Reload the page to leave it.':''; b.style.display=TESTMODE?'block':'none'; }
-function claudeOnce(model,userText,maxTok,tmo,opts){
- var system=[{type:'text',text:RULES}];
- if(PACK) system.push({type:'text',text:'CONTEXT PACK (built '+(PACK.built||'?')+'):\n'+JSON.stringify(PACK),cache_control:{type:'ephemeral'}});
- var cst=(opts&&opts.noSheet)?'':callSheetText(); if(cst) system.push({type:'text',text:cst});
- var ctl=new AbortController(), timer=setTimeout(function(){ ctl.abort(); },tmo);
- return fetch('https://api.anthropic.com/v1/messages',{method:'POST',signal:ctl.signal,headers:{'content-type':'application/json','x-api-key':S.apikey,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},
-  body:JSON.stringify({model:model,max_tokens:maxTok,system:system,messages:[{role:'user',content:userText}]})})
-  .then(function(r){ return r.json().then(function(j){ clearTimeout(timer); if(!r.ok){ var er=new Error((j.error&&j.error.message)||('API HTTP '+r.status)); er.retry=(r.status===429||r.status>=500||/overload/i.test(er.message)); throw er; } return j; },function(){ clearTimeout(timer); var er=new Error('API HTTP '+r.status+' (unreadable reply)'); er.retry=(r.status===429||r.status>=500); throw er; }); })
-  .then(function(j){
-   usage.calls++; var u=j.usage||{}; usage.inTok+=(u.input_tokens||0)+(u.cache_creation_input_tokens||0); usage.cacheTok+=(u.cache_read_input_tokens||0); usage.outTok+=(u.output_tokens||0);
-   var text=(j.content||[]).filter(function(c){return c.type==='text'}).map(function(c){return c.text}).join('\n').trim();
-   return finishReply('Anthropic',j.model||model,j.stop_reason,(j.content||[]).map(function(c){return c.type}).join(','),u.output_tokens||0,text,j.stop_reason==='max_tokens');
-  },netErr(timer));
-}
-function netErr(timer){ return function(e){ clearTimeout(timer); if(e.name==='AbortError'){ var er=new Error('The AI request timed out.'); er.retry=true; throw er; } if(e instanceof TypeError){ e.retry=true; } throw e; }; }
-// Shared reply checks for every provider: usage saved, last reply shown, empty and cut-short replies flagged.
+function setTestBar(){ var b=$('testBar'); b.textContent=TESTMODE?(TESTLONG?'TEST MODE (long): about 400 synthetic captions, nothing is saved to Drive. Reload the page to leave it.':'TEST MODE: synthetic captions, nothing is saved to Drive. Reload the page to leave it.'):''; b.style.display=TESTMODE?'block':'none'; }
+// Shared reply checks: usage saved, last reply shown, empty and cut-short replies flagged.
 function finishReply(prov,model,stop,blocks,outTok,text,cut){
  try{ localStorage.setItem(KEY+'_usage',JSON.stringify(usage)); }catch(e){} renderUsage();
  lastModel=model; renderPath();
@@ -626,54 +686,30 @@ function finishReply(prov,model,stop,blocks,outTok,text,cut){
  if(cut){ var ec=new Error('The AI reply was cut short (length limit).'); ec.moreTokens=true; ec.partial=text; throw ec; }
  return text;
 }
-// OpenRouter (5 Nov 2026, sk03): model ids with a "/" go here, straight from the browser (no hub).
-// provider.data_collection=deny: only providers that do not store or train on prompts.
-function orOnce(model,userText,maxTok,tmo,opts){
- var sys=RULES; if(PACK) sys+='\n\nCONTEXT PACK (built '+(PACK.built||'?')+'):\n'+JSON.stringify(PACK);
- var cst=(opts&&opts.noSheet)?'':callSheetText(); if(cst) sys+='\n\n'+cst;
- var ctl=new AbortController(), timer=setTimeout(function(){ ctl.abort(); },tmo);
- return fetch('https://openrouter.ai/api/v1/chat/completions',{method:'POST',signal:ctl.signal,headers:{'content-type':'application/json','authorization':'Bearer '+S.orkey,'x-title':'Sidekick'},
-  body:JSON.stringify({model:model,max_tokens:maxTok,provider:{data_collection:'deny'},messages:[{role:'system',content:sys},{role:'user',content:userText}]})})
-  .then(function(r){ return r.json().then(function(j){ clearTimeout(timer); if(!r.ok||j.error){ var er=new Error('OpenRouter: '+((j.error&&j.error.message)||('HTTP '+r.status))); er.retry=(r.status===429||r.status>=500); throw er; } return j; },function(){ clearTimeout(timer); var er=new Error('OpenRouter HTTP '+r.status+' (unreadable reply)'); er.retry=(r.status===429||r.status>=500); throw er; }); })
-  .then(function(j){
-   usage.calls++; var u=j.usage||{}, cached=((u.prompt_tokens_details||{}).cached_tokens)||0;
-   usage.orIn=(usage.orIn||0)+(u.prompt_tokens||0); usage.orOut=(usage.orOut||0)+(u.completion_tokens||0);
-   usage.inTok+=(u.prompt_tokens||0)-cached; usage.cacheTok+=cached; usage.outTok+=(u.completion_tokens||0);
-   var c=(j.choices||[])[0]||{}, msg=c.message||{}, text=(typeof msg.content==='string'?msg.content:'').trim();
-   return finishReply('OpenRouter',j.model||model,c.finish_reason,'text',u.completion_tokens||0,text,c.finish_reason==='length');
-  },netErr(timer));
-}
-function viaOR(model){ return /\//.test(model||'') && !orDown; }
-// Fallback by ROLE, not by model id (6 Nov 2026): with the same id in both boxes (e.g. openrouter/auto),
-// answer and wrap calls must still fall back to the answer model, not the fast one.
-function fallbackModel(model,opts){ var role=opts&&opts.role; if(role) return role==='fast'?FB_FAST:FB_SMART; return model===S.mFast?FB_FAST:FB_SMART; }
-function claudeAs(role,userText,maxTok,opts){ return claude(role==='fast'?S.mFast:S.mSmart,userText,maxTok,Object.assign({},opts||{},{role:role})); }
-// retries: more room when the reply ran out of tokens, and a short wait on rate limit, overload, network error or timeout
-function claude(model,userText,maxTok,opts){
- var lane0=laneActive();
- if(lane0 && !S.hubkey) return Promise.reject(new Error('Add the hub key in Setup, or switch the path to direct.'));
- if(!lane0 && viaOR(model) && !S.orkey) return Promise.reject(new Error('Model '+model+' needs the OpenRouter key in settings.'));
- if(!lane0 && !viaOR(model) && !S.apikey) return Promise.reject(new Error(laneOn()?'The work lane is down this meeting and there is no Anthropic key for the direct fallback.':'Add your Anthropic API key in settings.'));
+// The role argument is kept for the call sites; the model comes from routing.json by task.
+function claudeAs(role,userText,maxTok,opts){ return claude(userText,maxTok,opts||{}); }
+// retries: ONE retry at min(2x, 16000) when the reply ran out of tokens, and a short wait on rate limit, network error or timeout. Never another host.
+function claude(userText,maxTok,opts){
+ opts=opts||{};
+ if(laneDown) return Promise.reject(new Error('Work lane unreachable: stopped for this call. Tap New call to try the hub again.'));
+ if(!S.hubkey) return Promise.reject(new Error('Add the hub key in Setup (work lane).'));
  if(usage.day!==today()) usage=loadUsage();
  if(usage.calls>=S.cap) return Promise.reject(new Error('Daily AI cap reached ('+S.cap+'). Raise it in settings if needed.'));
  if(Date.now()<pausedUntil) return Promise.reject(new Error('AI paused until '+clock(pausedUntil)+' after 3 failures in a row: '+lastAIErr+' (details in Setup > AI errors)'));
- var tok=lane0?routeFor(opts&&opts.task).max_tokens:Math.max(maxTok||0,2000), tmo=tok>=4000?180000:90000, tries=0;
+ var tok=routeFor(opts.task).max_tokens, tmo=tok>=4000?180000:90000, tries=0, lenRetried=false;
  function attempt(){
   tries++;
-  var lane=laneActive(), or=lane?false:viaOR(model), m=or?model:(/\//.test(model)?fallbackModel(model,opts):model);
-  var run=lane?laneOnce(opts&&opts.task,userText,tok,tmo,opts):(or?orOnce:claudeOnce)(m,userText,tok,tmo,opts);
-  return run.then(function(t){ failRun=0; if(or) orFail=0; banner(''); return t; },function(e){
-   logErr('try '+tries+': '+e.message);
-   if(lane && e.laneTransport){   // transport failure ONLY: direct for the rest of this meeting, visibly
-    laneFallback(e.message); usage.fails=(usage.fails||0)+1; try{ localStorage.setItem(KEY+'_usage',JSON.stringify(usage)); }catch(x){}
-    if(S.apikey){ tries=0; tok=Math.max(maxTok||0,2000); tmo=tok>=4000?180000:90000; return attempt(); }
-    lastAIErr=e.message; renderUsage(); throw new Error(e.message+'. No Anthropic key is set for the direct fallback.');
+  return laneOnce(opts.task,userText,tok,tmo,opts).then(function(t){ failRun=0; banner(''); return t; },function(e){
+   logErr('try '+tries+': '+e.message); mt.fail++;
+   if(e.laneTransport){   // the hub cannot be reached: stop for this call, no other path
+    laneStop(e.message); usage.fails=(usage.fails||0)+1; try{ localStorage.setItem(KEY+'_usage',JSON.stringify(usage)); }catch(x){}
+    lastAIErr=e.message; renderUsage(); throw new Error('Work lane unreachable: stopped for this call ('+e.message+')');
    }
-   if(e.refused){ lastAIErr=e.message; usage.fails=(usage.fails||0)+1; try{ localStorage.setItem(KEY+'_usage',JSON.stringify(usage)); }catch(x){} setLanePill(e.message.replace(/^Work lane: /,'Work lane '),'bad'); renderUsage(); throw e; }   // a refusal is shown, never retried elsewhere, never counted toward the 3-failure pause
-   if(or && !e.moreTokens){ orFail++; if(orFail>=2){ orDown=true; orFail=0; logErr('OpenRouter failed twice in a row: using '+fallbackModel(model,opts)+' for the rest of this call'); banner('OpenRouter is failing: switched to Claude for the rest of this call.'); renderUsage(); if(S.apikey){ tries=0; return attempt(); } } } usage.fails=(usage.fails||0)+1; try{ localStorage.setItem(KEY+'_usage',JSON.stringify(usage)); }catch(x){}
-   if(tries<3 && e.moreTokens){ tok=Math.min(tok*3,16000); banner('AI reply was cut short, retrying with more room...'); return attempt(); }
-   if(e.partial){ banner('AI reply still cut short after retries; showing what came back.'); return e.partial+'\n\n(Cut short: the reply hit the length limit.)'; }
-   if(tries<3 && e.retry){ var wait=tries===1?2000:6000; banner('AI busy ('+e.message+'), retrying in '+(wait/1000)+' s...'); return new Promise(function(res){ setTimeout(res,wait); }).then(attempt); }
+   if(e.refused){ lastAIErr=e.message; usage.fails=(usage.fails||0)+1; try{ localStorage.setItem(KEY+'_usage',JSON.stringify(usage)); }catch(x){} setLanePill(e.message.replace(/^Work lane: /,'Work lane '),'bad'); renderUsage(); throw e; }   // a refusal is shown, never retried, never counted toward the 3-failure pause
+   usage.fails=(usage.fails||0)+1; try{ localStorage.setItem(KEY+'_usage',JSON.stringify(usage)); }catch(x){}
+   if(e.moreTokens && !lenRetried){ var nt=Math.min(tok*2,16000); if(nt>tok){ lenRetried=true; tok=nt; mt.cutRetries++; banner('AI reply was cut short, retrying once with more room...'); return attempt(); } }
+   if(e.partial){ banner('AI reply still cut short after the retry; showing what came back.'); return e.partial+'\n\n(Cut short: the reply hit the length limit.)'; }
+   if(tries<3 && e.retry){ var wait=tries===1?2000:6000; mt.retries++; banner('AI busy ('+e.message+'), retrying in '+(wait/1000)+' s...'); return new Promise(function(res){ setTimeout(res,wait); }).then(attempt); }
    failRun++; lastAIErr=e.message; if(failRun>=3){ pausedUntil=Date.now()+300000; failRun=0; banner('AI paused for 5 minutes after 3 failures in a row: '+e.message); }
    renderUsage(); throw e;
   });
@@ -685,7 +721,7 @@ function showAsk(who,say,more,hot){ $('askWho').textContent=who; $('askSay').tex
 function gateThenAnswer(L,why){
  showAsk('Heard '+why+' from '+(L.author||'someone')+' at '+clock(L.t)+': "'+L.text+'". Checking...','','',true);
  var q='Recent captions (newest last):\n'+transcript(25)+'\n\nThe line that triggered this: '+(L.author||'?')+': '+L.text+'\n\nIs Harsh being asked a question, or asked or expected to do something (send, share, confirm, follow up, check), or about to be assigned or assumed to own something, right now? A request aimed at the whole group including him counts. Reply with JSON only: {"for_me": true|false, "kind": "question"|"action", "ask": "<what is being asked of him, in a few words, or empty>"}';
- claudeAs('fast',q,400,{task:'detect'}).then(function(t){
+ claudeAs('fast',q,400,{ctx:'captions',task:'detect'}).then(function(t){
   var g=parseJSON(t);
   if(!g||!g.for_me){ showAsk('Heard '+why+' from '+(L.author||'someone')+' at '+clock(L.t)+'. Not a question for you.','','"'+L.text+'"',false); return; }
   var cand={ask:g.ask||L.text, from:L.author||'', quote:L.text};
@@ -725,7 +761,7 @@ $('askedBtn').onclick=function(){
  if(!lines.length){ banner('No captions yet. Click the bookmark on the Teams tab.'); return; }
  showAsk('Finding what you were just asked...','Thinking...','',true);
  var q=liveContext(80)+'\n\nHarsh just tapped "I have been asked". Find the most recent question or request put to Harsh (by name, as "you" right after he spoke, or to the group he is in). Reply with JSON only: {"found": true|false, "asker": "<speaker name>", "quote": "<the caption line(s), verbatim>", "ask": "<what is being asked of him, in plain words>", "kind": "question"|"action"}. If nothing was put to him in the last few minutes, found=false.';
- claudeAs('fast',q,500,{noSheet:true,task:'detect'}).then(function(t){
+ claudeAs('fast',q,500,{ctx:'captions',task:'detect'}).then(function(t){
   var g=parseJSON(t);
   if(!g||!g.found){ showAsk('No question to you found in the last few minutes.','','Type what was asked in "What should I say?" and tap it, or tap again once it is in the captions.',false); return; }
   answer(g.ask||g.quote,g.asker,g.kind,g.quote);
@@ -871,36 +907,52 @@ $('briefBtn').onclick=function(){
 };
 
 // ---------- wrap ----------
-var wrapText='', wrapLines=0;
+var wrapText='', wrapLines=0, wrapBusy=false, callGen=0;
 function doWrap(after){
+ if(wrapBusy) return;   // a wrap is already running: a second tap must not start a second call (9:04 call, 10 Nov)
  if(!lines.length){ $('wrapOut').textContent='No captions captured yet.'; return; }
- $('wrapOut').textContent='Wrapping...';
+ wrapBusy=true; $('wrapBtn').disabled=true; $('wrapOut').textContent='Wrapping...';
+ var g=callGen;
+ function release(){ wrapBusy=false; $('wrapBtn').disabled=false; }
  var full=lines.map(function(L){ return '['+clock(L.t)+'] '+(L.author||'?')+': '+L.text; }).join('\n');
  var q='Full caption transcript of the call (speaker names from Teams, words can be misheard):\n'+full.slice(-120000)+'\n\nWrite the wrap for Harsh only. Sections, each a short list, "None" when empty:\n1. Asked of Harsh (who asked, what, quote the caption)\n2. What Harsh said he would do (only his own lines, as said)\n3. Decisions that affect his work\n4. Follow-ups to send (to whom, one line each)\n5. Tracker updates to propose (tracker item id, the new log line)\nUse only what the captions say. Keep names, story numbers and dates as said; mark anything unclear (as heard).';
  wrapLines=lines.length;
- claudeAs('smart',q,4000,{task:'wrap'}).then(function(t){ wrapText=t; $('wrapOut').textContent=t; $('copyWrap').disabled=false; $('saveWrap').disabled=false; $('saveWrap').textContent='Save to Drive'; if(after) after(); }).catch(function(e){ $('wrapOut').textContent='Wrap failed: '+e.message; saving=false; $('saveWrap').disabled=!wrapText; $('saveWrap').textContent='Save to Drive'; });
+ claudeAs('smart',q,12000,{task:'wrap'}).then(function(t){ if(g!==callGen) return; release(); wrapText=t; $('wrapOut').textContent=t; $('copyWrap').disabled=false; $('saveWrap').disabled=false; $('saveWrap').textContent='Save to Drive'; if(after) after(); }).catch(function(e){ if(g!==callGen) return; release(); $('wrapOut').textContent='Wrap failed: '+e.message; saving=false; $('saveWrap').disabled=!wrapText; $('saveWrap').textContent='Save to Drive'; });
 }
-$('wrapBtn').onclick=function(){ doWrap(); };
-$('copyWrap').onclick=function(){ if(navigator.clipboard) navigator.clipboard.writeText(wrapText).then(function(){ $('copyWrap').textContent='Copied'; setTimeout(function(){ $('copyWrap').textContent='Copy'; },2000); }); };
+$('wrapBtn').onclick=function(){ if(wrapBusy) return; doWrap(); };
+$('copyWrap').onclick=function(){ if(navigator.clipboard) navigator.clipboard.writeText(wrapText+'\n\n'+callHealth()).then(function(){ $('copyWrap').textContent='Copied'; setTimeout(function(){ $('copyWrap').textContent='Copy'; },2000); }); };
 var saving=false, savedWrap=null;
-function saveNow(rewrapped){
- if(saving) return;
- if(savedWrap!==null && savedWrap===wrapText){ $('saveWrap').textContent='Saved'; return; }
- if(!rewrapped && lines.length>wrapLines){ saving=true; $('saveWrap').disabled=true; $('saveWrap').textContent='Re-wrapping...'; banner('New captions since the wrap ('+(lines.length-wrapLines)+' lines). Re-wrapping once before saving...'); doWrap(function(){ banner(''); saving=false; saveNow(true); }); return; }
+// WRAP-Q1 (10 Nov 2026, his answer 1): Save after new captions arrived asks, default 1: save as is (the new lines still go in the transcript) or re-wrap first.
+function hideSaveAsk(){ var a=$('saveAsk'); if(a) a.style.display='none'; }
+function askSave(fresh){
+ $('saveAsIs').textContent='1. Save as is ('+fresh+' new lines go in the transcript)';
+ $('saveRewrap').textContent='2. Re-wrap then save';
+ $('saveAsk').style.display='flex'; try{ $('saveAsIs').focus(); }catch(e){}
+}
+function saveNow(mode){
+ if(saving||wrapBusy) return;
+ if(savedWrap!==null && savedWrap===wrapText){ hideSaveAsk(); $('saveWrap').textContent='Saved'; return; }
+ var fresh=lines.length-wrapLines;
+ if(!mode && fresh>0){ askSave(fresh); return; }
+ hideSaveAsk();
+ if(mode==='rewrap'){ saving=true; $('saveWrap').disabled=true; $('saveWrap').textContent='Re-wrapping...'; doWrap(function(){ banner(''); saving=false; saveNow('asis'); }); return; }
  saving=true; $('saveWrap').disabled=true; $('saveWrap').textContent='Saving...';
- var d=new Date(), stamp=d.getFullYear()+pad(d.getMonth()+1)+pad(d.getDate())+'-'+pad(d.getHours())+pad(d.getMinutes());
- var full=lines.map(function(L){ return '['+clock(L.t)+'] '+(L.author||'?')+': '+L.text; }).join('\n')+'\n'+captureHealth(), w=wrapText;
- function go(){ driveSave('wrap-'+stamp+'.txt',w).then(function(){ return driveSave('transcript-'+stamp+'.txt',full); }).then(function(){ savedWrap=w; saving=false; $('saveWrap').textContent='Saved'; }).catch(function(e){ saving=false; $('saveWrap').disabled=false; $('saveWrap').textContent='Save to Drive'; banner('Not saved: '+e.message); }); }
+ var stamp=bcStamp(Date.now()), hf=callHealth();
+ var full=lines.map(function(L){ return '['+clock(L.t)+'] '+(L.author||'?')+': '+L.text; }).join('\n')+'\n'+captureHealth()+'\n'+hf, w=wrapText+'\n\n'+hf, wt=wrapText;
+ function go(){ driveSave('wrap-'+stamp+'.txt',w).then(function(){ return driveSave('transcript-'+stamp+'.txt',full); }).then(function(){ savedWrap=wt; saving=false; $('saveWrap').textContent='Saved'; }).catch(function(e){ saving=false; $('saveWrap').disabled=false; $('saveWrap').textContent='Save to Drive'; banner('Not saved: '+e.message); }); }
  if(driveLive()) go(); else connectDrive(go);
 }
-$('saveWrap').onclick=function(){ saveNow(false); };
-$('newCall').onclick=function(){ if(lines.length && !confirm('Clear this call\'s captions and people?')) return; orDown=false; orFail=0; laneNewMeeting(); renderUsage(); oldSig={}; lines.forEach(function(L){ oldSig[sig(L.author,L.text)]=1; }); savedWrap=null; saving=false; lines=[]; byKey={}; cur={}; callSum=''; sumAt=0; sumLines=0; heardPeople={}; chosen={}; hiddenSpans=[]; if(teamsHidden) hiddenSince=Date.now(); alertLog=[]; answering=null; gateNext=null; if(gateTimer){ clearTimeout(gateTimer); gateTimer=null; } renderAlerts(); wrapText=''; wrapLines=0; renderTx(); renderCard(); $('wrapOut').textContent='New call. Tap Wrap at the end.'; $('copyWrap').disabled=true; $('saveWrap').disabled=true; $('saveWrap').textContent='Save to Drive'; showAsk('Nothing yet.','','',false); };
-// ---------- work lane wiring ----------
-$('pathDirect').onclick=function(){ setPath('direct'); };
-$('pathLane').onclick=function(){ setPath('lane'); };
+$('saveWrap').onclick=function(){ saveNow(); };
+$('saveAsIs').onclick=function(){ saveNow('asis'); };
+$('saveRewrap').onclick=function(){ saveNow('rewrap'); };
+$('saveAsk').onkeydown=function(e){ if(e.key==='1'){ e.preventDefault(); saveNow('asis'); } else if(e.key==='2'){ e.preventDefault(); saveNow('rewrap'); } else if(e.key==='Escape'){ hideSaveAsk(); } };
+$('newCall').onclick=function(){ if(lines.length && !confirm('Clear this call\'s captions and people?')) return; callGen++; wrapBusy=false; $('wrapBtn').disabled=false; hideSaveAsk(); hideResume(); mt=newMeeting(); laneNewMeeting(); renderUsage(); oldSig={}; lines.forEach(function(L){ oldSig[sig(L.author,L.text)]=1; }); savedWrap=null; saving=false; lines=[]; byKey={}; cur={}; callSum=''; sumAt=0; sumLines=0; heardPeople={}; chosen={}; hiddenSpans=[]; if(teamsHidden) hiddenSince=Date.now(); alertLog=[]; answering=null; gateNext=null; if(gateTimer){ clearTimeout(gateTimer); gateTimer=null; } renderAlerts(); wrapText=''; wrapLines=0; renderTx(); renderCard(); $('wrapOut').textContent='New call. Tap Wrap at the end.'; $('copyWrap').disabled=true; $('saveWrap').disabled=true; $('saveWrap').textContent='Save to Drive'; showAsk('Nothing yet.','','',false); };
+// ---------- wiring ----------
 $('testBtn').onclick=function(){ startTest(); };
 renderPath(); setTestBar();
-loadRouting().then(function(){ if(laneOn()) probeLane('page'); if(TESTMODE) startTest(); });
+if(!S.hubkey) setLanePill('Work lane: add the hub key in Setup','warn'); else setLanePill('Work lane: not checked yet','');
+loadRouting().then(function(){ probeLane('page'); if(TESTMODE) startTest(); });
+beat();
 })();
 </script>
 <script>

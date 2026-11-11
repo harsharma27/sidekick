@@ -565,7 +565,7 @@ function renderUsage(){ var paused=Date.now()<pausedUntil; $('aiPill').textConte
 renderUsage();
 var errLog=[];
 // Per-meeting counters for the call-health footer (10 Nov 2026, fix 4). Counts, times, models, tokens, cost and error classes only: never caption text.
-var PAGE_V='2026-11-11.1';
+var PAGE_V='2026-11-11.2';
 function newMeeting(){ return {start:Date.now(),calls:{},ok:0,fail:0,retries:0,cutRetries:0,stops:0,models:{},groups:{},cost:0,costKnown:0,noPrice:false,errs:[],tabsMax:1,asOk:0,asFail:0,gapMax:0,renewals:0,pkOk:0,pkFail:0,swaps:0,packVer:(PACK&&PACK.built)||''}; }
 var mt=newMeeting();
 function logErr(m){ errLog.push(clock(Date.now())+'  '+m); mt.errs.push(clock(Date.now())+' '+clip(m,120)); if(mt.errs.length>40) mt.errs.shift(); var el2=$('errLog'); if(el2) el2.textContent=errLog.slice().reverse().join('\n'); }
@@ -1034,7 +1034,7 @@ function saveNow(mode){
  if(mode==='rewrap'){ saving=true; $('saveWrap').disabled=true; $('saveWrap').textContent='Re-wrapping...'; doWrap(function(){ banner(''); saving=false; saveNow('asis'); }); return; }
  saving=true; $('saveWrap').disabled=true; $('saveWrap').textContent='Saving...';
  var stamp=bcStamp(Date.now()), wt=wrapText, wc=wrapCut;
- function go(){ storeFinal().then(function(r){ if(!r.ok) throw new Error('the transcript was not saved ('+r.reason+')'); var nm=storeName(), hf=callHealth(), w=wt+'\n\n'+hf+'\n\ntranscript file: '+nm+(wc?'\nwrap read the last '+wc.n+' of '+wc.m+' lines; full text in '+nm:''); return driveSave('wrap-'+stamp+'.txt',w); }).then(function(){ savedWrap=wt; saving=false; $('saveWrap').textContent='Saved'; }).catch(function(e){ saving=false; $('saveWrap').disabled=false; $('saveWrap').textContent='Save to Drive'; banner('Not saved: '+e.message); }); }
+ function go(){ var tErr=''; storeFinal().then(function(r){ if(!r.ok) tErr=r.reason||'unknown'; var nm=storeName(), hf=callHealth(), w=wt+'\n\n'+hf+'\n\ntranscript file: '+nm+(tErr?' (NOT final: '+tErr+')':'')+(wc?'\nwrap read the last '+wc.n+' of '+wc.m+' lines; full text in '+nm:''); return driveSave('wrap-'+stamp+'.txt',w); }).then(function(){ savedWrap=wt; saving=false; $('saveWrap').textContent=tErr?'Wrap saved, transcript not':'Saved'; if(tErr) banner('Wrap saved. Transcript not saved ('+tErr+'): tap the Transcript pill to retry.'); }).catch(function(e){ saving=false; $('saveWrap').disabled=false; $('saveWrap').textContent='Save to Drive'; banner('Not saved: '+e.message); }); }
  if(driveLive()) go(); else connectDrive(go);
 }
 $('saveWrap').onclick=function(){ saveNow(); };
@@ -1240,7 +1240,7 @@ function newCallClick(){
 }
 function storeOnClear(){
  if(TESTMODE){ lsDel(TKEY); ST=freshST(ST.callSeq+1); return; }
- if(lines.length){ storeKey(); var sn=snapshot(); sn.rec.finalAt=ST.finalAt; if(lsSet(PKEY,sn.json)){ prevSlot=sn.rec; } lsDel(LKEY+ST.key); idxDel(ST.key); }   // the cleared call always goes to the previous-call slot
+ if(lines.length){ storeKey(); var sn=snapshot(); sn.rec.finalAt=ST.finalAt; if(lsSet(PKEY,sn.json)){ prevSlot=sn.rec; lsDel(LKEY+ST.key); idxDel(ST.key); } }   // the cleared call always goes to the previous-call slot
  ST=freshST(ST.callSeq+1);
 }
 function doClear(){ storeOnClear(); hideClearAsk(); callGen++; wrapBusy=false; $('wrapBtn').disabled=false; hideSaveAsk(); hideResume(); mt=newMeeting(); laneNewMeeting(); renderUsage(); oldSig={}; lines.forEach(function(L){ oldSig[sig(L.author,L.text)]=1; }); savedWrap=null; saving=false; lines=[]; byKey={}; cur={}; callSum=''; sumAt=0; sumLines=0; heardPeople={}; chosen={}; hiddenSpans=[]; if(teamsHidden) hiddenSince=Date.now(); alertLog=[]; answering=null; gateNext=null; if(gateTimer){ clearTimeout(gateTimer); gateTimer=null; } renderAlerts(); wrapText=''; wrapLines=0; wrapCut=null; renderTx(); renderCard(); $('wrapOut').textContent='New call. Tap Wrap at the end.'; $('copyWrap').disabled=true; $('saveWrap').disabled=true; $('saveWrap').textContent='Save to Drive'; showAsk('Nothing yet.','','',false);  }
@@ -1249,7 +1249,7 @@ $('newCall').onclick=newCallClick;
 $('testBtn').onclick=function(){ startTest(); };
 renderPath(); setTestBar(); renderPackPill();
 if(!S.hubkey) setLanePill('Work lane: add the hub key in Setup','warn'); else setLanePill('Work lane: not checked yet','');
-loadRouting().then(function(){ localInit(); probeLane('page'); if(TESTMODE) startTest(); });
+loadRouting().then(function(){ try{ localInit(); }catch(e){ logErr('browser copy: '+e.message); } probeLane('page'); if(TESTMODE) startTest(); });
 beat();
 })();
 </script>

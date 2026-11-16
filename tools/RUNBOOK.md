@@ -73,6 +73,8 @@ Run the script from the repo root with `python3 -I tools/build_live.py ...`.
    `parentId` = folder, `contentMimeType: "application/json"`,
    `disableConversionToGoogleType: true`, and `textContent` = the full content of
    `$W/out/sidekick-pack.json` copied exactly (Read the file; it is pure ASCII with one value per line, newlines included, and ends with a newline).
+   Never upload by file reference (`base64Content` = `sha256:<hash>:<path>`), even though it is cheaper:
+   it conflicts with the hub's design (Harsh, 16 Nov 2026). Always use `textContent` as above.
    Pass: the returned `fileSize` equals `pack_bytes`. If not, `trash_file` the new file
    (so the previous pack stays the newest) and stop.
 

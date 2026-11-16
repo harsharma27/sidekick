@@ -69,7 +69,7 @@ Run the script from the repo root with `python3 -I tools/build_live.py ...`.
    `END LIVE LIST`. If the brief had no LIVE LIST, it is inserted right under the first
    `CURRENT STATE` heading. Text outside the block is never touched.
 
-**Interactive sessions stop after step 6 (brief written). Do NOT run steps 7 to 9: the hub rebuilds and uploads the pack from the tracker every 15 to 20 minutes (Harsh, 16 Nov 2026). Never upload or paste the pack from a session.**
+**Interactive sessions never run this RUNBOOK and never edit the brief, the pack or sidekick-calls.json in Drive (Harsh, 16 Nov 2026). They only write tracker lines (see 'Writing to the tracker' below), commit and push; the hub publishes the brief and pack every 15 minutes.**
 
 7. **Upload the pack (hub only; sessions skip steps 7 to 9).** `Google_Drive create_file` with `title: "sidekick-pack.json"`,
    `parentId` = folder, `contentMimeType: "application/json"`,

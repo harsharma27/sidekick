@@ -69,7 +69,9 @@ Run the script from the repo root with `python3 -I tools/build_live.py ...`.
    `END LIVE LIST`. If the brief had no LIVE LIST, it is inserted right under the first
    `CURRENT STATE` heading. Text outside the block is never touched.
 
-7. **Upload the pack.** `Google_Drive create_file` with `title: "sidekick-pack.json"`,
+**Interactive sessions stop after step 6 (brief written). Do NOT run steps 7 to 9: the hub rebuilds and uploads the pack from the tracker every 15 to 20 minutes (Harsh, 16 Nov 2026). Never upload or paste the pack from a session.**
+
+7. **Upload the pack (hub only; sessions skip steps 7 to 9).** `Google_Drive create_file` with `title: "sidekick-pack.json"`,
    `parentId` = folder, `contentMimeType: "application/json"`,
    `disableConversionToGoogleType: true`, and `textContent` = the full content of
    `$W/out/sidekick-pack.json` copied exactly (Read the file; it is pure ASCII with one value per line, newlines included, and ends with a newline).

@@ -46,5 +46,14 @@ rr = tl.replay(nw + '\n' + st + '\n')[0]
 txt, cnt = bl.build_live(rr, datetime.datetime(2026, 11, 20, 20, 0, tzinfo=bl.PT), 'fp')
 check('closed row with derived updated lands in DONE TODAY', cnt['done'] == 1 and 'a03' in txt, txt)
 check('LIVE LIST has no em dash', '\u2014' not in txt)
+
+check('Custom_Field__c and __init__ survive', nx({'log': [{'t': 'Set Custom_Field__c on __init__ now'}]}) == 'Set Custom_Field__c on __init__ now', nx({'log': [{'t': 'Set Custom_Field__c on __init__ now'}]}))
+nw2 = tl.make_event('a04', 'NEW', {'status': 'done', 'title': 'D', 'court': 'Harsh', 'updated': '2026-11-17T00:00:00Z', 'log': []}, '2026-11-17T00:00:00Z')
+lg2 = tl.make_event('a04', 'LOG', {'d': '2026-11-20', 't': 'reopened note'}, '2026-11-20T18:00:00Z')
+r2 = tl.replay(nw2 + '\n' + lg2 + '\n')[0]
+t2, c2 = bl.build_live(r2, datetime.datetime(2026, 11, 20, 20, 0, tzinfo=bl.PT), 'fp')
+check('an old done row with a LOG today reappears in DONE TODAY', c2['done'] == 1, t2)
+q = '[unreviewed, auto b1] ' + 'w' * 300
+check('quarantine tag stays in front of its text in next:', nx({'log': [{'t': q}]}).startswith('[unreviewed, auto b1] w'))
 print('\n' + ('ALL PASS' if not fails else '%d FAILED' % fails))
 sys.exit(1 if fails else 0)

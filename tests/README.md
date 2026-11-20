@@ -78,3 +78,17 @@ no key-shaped string anywhere in the repo.
 "blocked by the work-lane rule" or "switched off" and never retried or sent anywhere else; network error, 502, 504, 5xx without `refused:` and no first byte by the deadline fall back to direct for the
 rest of the meeting with a banner, and the fallback count goes out as `x-sk-fallbacks` on the next door call; a break after the first byte, a gate 429, 401 and 403 do NOT fall back; the toggle, the hub key
 field, the health probe, test mode (synthetic captions, Drive blocked) and a real CSP block. A mutation (fall back on refusals too) makes 13 checks fail.
+
+## fix_test.js and gate_mock.js (call card and live answers, 20 Nov 2026)
+
+Run before every commit that touches the call-card pick, `answer()`, the "I've been asked" detect or `laneSystem` in `live.html`:
+
+```
+node tests/fix_test.js        # needs playwright; the gate, Drive and Google sign-in are mocked in the page, the clock is faked in the page
+node tests/lane_test.js       # unchanged; tests/gate_mock.js is a copy of its mock, used only by fix_test.js
+```
+
+Covers: the auto card on load / New call / pack refresh / a later call's start (half-open windows, soonest next start within 15 min, running call with the latest start, status card and timeless cards never chosen, no-match
+state), a hand pick that holds until New call or the "Auto" entry, no list rebuild while it has focus, the answer request with no call sheet and no card text, THE LAST MINUTE block, the numbered detect snapshot with the last
+2 minutes split in code, line numbers validated by the page, "Not this one" (no second detect, no wraparound), the stale-result guards (askGen, detGen, callGen), and the slow path (no first byte, one 502, two network errors) for the detect.
+`tests/live_test.js` and `tests/lane_test.js` still hold older checks that fail on the lane-only page (live_test.js: 26 at a2d9de3, listed in the change record); they are logged, not repaired, and no check that passed may start failing.

@@ -153,10 +153,10 @@ _BUL = re.compile(r'^\s*(?:[-*\u2022]\s+|\d+[.)]\s+|#+\s+)')
 
 
 def plain(s):
-    """Strip markdown (**, __, backticks, a leading bullet or #) before clean() and clip()."""
+    """Strip markdown (**, backticks, (underscores are kept: identifiers), a leading bullet or #) before clean() and clip()."""
     s = str(s or '').strip()
     s = _BUL.sub('', s)
-    for m in ('**', '__', '`'):
+    for m in ('**', '`'):
         s = s.replace(m, '')
     return clean(s)
 

@@ -28,7 +28,7 @@ Subcommands
       <downloaded> = raw pack JSON, or a download_file_content result ({"content": base64}).
       exit 0 only if it parses and its items equal the local pack's items.
 """
-import base64, datetime, glob, hashlib, json, os, sys
+import base64, datetime, glob, hashlib, json, os, re, sys
 from zoneinfo import ZoneInfo
 
 PT = ZoneInfo('America/Vancouver')  # BC is on permanent UTC-7; Los_Angeles is an hour behind from Nov 2026
@@ -148,9 +148,28 @@ def is_harsh(court):
     return c == '' or c.startswith('harsh')
 
 
+LIVE_FORMAT = 2  # bump when the LIVE LIST text format changes, so doc-plan republishes
+_BUL = re.compile(r'^\s*(?:[-*\u2022]\s+|\d+[.)]\s+|#+\s+)')
+
+
+def plain(s):
+    """Strip markdown (**, __, backticks, a leading bullet or #) before clean() and clip()."""
+    s = str(s or '').strip()
+    s = _BUL.sub('', s)
+    for m in ('**', '__', '`'):
+        s = s.replace(m, '')
+    return clean(s)
+
+
 def line(key, d):
+    """next: = the row's `next` field, then the latest log line, when both exist and differ (20 Nov 2026)."""
     log = d.get('log') or []
-    nxt = clip(clean(log[-1].get('t')), 160) if log else 'no log yet'
+    last = plain(log[-1].get('t')) if log and isinstance(log[-1], dict) else ''
+    nx = plain(d.get('next')) if isinstance(d.get('next'), str) else ''
+    parts = [x for x in (nx, last) if x]
+    if len(parts) == 2 and parts[0] == parts[1]:
+        parts = parts[:1]
+    nxt = clip(' | '.join(parts), 160) if parts else 'no log yet'
     return '%s %s (court: %s; next: %s)' % (key, clean(d.get('title')), clean(d.get('court')) or 'Harsh', nxt)
 
 
@@ -200,7 +219,7 @@ def build_live(items, now, fp):
 
 
 def fingerprint(items, today):
-    blob = json.dumps(items, sort_keys=True, ensure_ascii=False) + today.isoformat()
+    blob = json.dumps(items, sort_keys=True, ensure_ascii=False) + today.isoformat() + 'fmt%d' % LIVE_FORMAT
     return hashlib.sha256(blob.encode('utf-8')).hexdigest()[:12]
 
 

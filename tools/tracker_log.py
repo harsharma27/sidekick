@@ -12,6 +12,9 @@ Event line (one per paragraph; any line not starting with "{" is a comment and i
   {"v":1,"e":"<id>","ts":"<UTC ISO>","id":"<row>","op":"SET","set":{"field":value,...}}
   {"v":1,"e":"<id>","ts":"<UTC ISO>","id":"<row>","op":"LOG","log":{"d":"YYYY-MM-DD","t":"..."}}
 "e" is a content hash: a line appended twice is applied once.
+20 Nov 2026: replay derives a row's "updated" = the latest of its own value and the ts of every SET/LOG
+(ISO-parsed only; a bad ts is ignored). Event hashes are unchanged. The "diff" subcommand therefore
+differs from an old export for rows with later events (migration use is over).
 
 Subcommands (all local; the Claude session does the Drive/Docs calls, see tools/RUNBOOK.md)
   seed <export_dir> <out.txt> [active|all]
@@ -36,7 +39,7 @@ from zoneinfo import ZoneInfo
 
 PT = ZoneInfo('America/Vancouver')
 OPS = ('NEW', 'SET', 'LOG')
-COMPACT_AT = 800000  # bytes; Google Docs top out near 1 M characters
+COMPACT_AT = 800000  # bytes; early warning only: the log is tracker.log in a private git repo, not a Google Doc
 
 
 def die(msg, code=2):
@@ -116,6 +119,27 @@ def read_log_text(path):
     return raw.decode('utf-8-sig')
 
 
+def _ts(v):
+    """ISO string (or plain date) -> aware UTC datetime, else None."""
+    if not isinstance(v, str) or not v:
+        return None
+    try:
+        dt = datetime.datetime.fromisoformat(v.replace('Z', '+00:00')) if len(v) > 10 else \
+            datetime.datetime.combine(datetime.date.fromisoformat(v), datetime.time())
+    except ValueError:
+        return None
+    return dt if dt.tzinfo else dt.replace(tzinfo=datetime.timezone.utc)
+
+
+def _bump(row, ts):
+    t = _ts(ts)
+    if t is None:
+        return
+    cur = _ts(row.get('updated'))
+    if cur is None or t > cur:
+        row['updated'] = ts
+
+
 def replay(text):
     rows, seen, n = {}, set(), 0
     for i, line in enumerate(text.splitlines(), 1):
@@ -146,6 +170,8 @@ def replay(text):
             rows[rid].update(s)
         else:
             rows[rid].setdefault('log', []).append(ev.get('log'))
+        if op != 'NEW':
+            _bump(rows[rid], ev.get('ts'))
     if not rows:
         die('no rows in the log')
     return rows, n

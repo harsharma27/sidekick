@@ -103,7 +103,7 @@ the error, and confirmation that nothing after it was written.
 
 - BC time is `America/Vancouver` (permanent UTC-7; `America/Los_Angeles` is an hour behind in winter). TODAY = open or waiting items whose due or chase
   date is today or earlier; TOMORROW = next weekday; WAITING ON OTHERS = court is not Harsh
-  and no date soon; DONE TODAY = status done and updated today (Pacific); `updated` = the later of the row's own value and the ts of its latest SET/LOG (derived in replay, 20 Nov), so a done row touched today shows again. Parked items are left out.
+  and no date soon; DONE TODAY = status done and updated today (BC time); `updated` = the later of the row's own value and the ts of its latest SET/LOG (derived in replay, 20 Nov), so a done row touched today shows again. Parked items are left out.
 - Pack items = open and waiting items, plus done items updated (as above) in the last 2 days, each with the
   last 5 log lines clipped to 460 characters.
 - The fingerprint covers the tracker items and today's date, so an unchanged tracker on the

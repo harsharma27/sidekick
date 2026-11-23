@@ -1,13 +1,18 @@
 // Sidekick live.html regression test. Run from the repo root before committing any live.html change:
-//   node tests/live_test.js
+//   node tests/live_test.js        (needs playwright; the work-lane gate and Drive are mocked in the page, every other request is recorded and aborted)
 // Exit code 0 = all checks passed; 1 = a check failed (do not commit).
-// Builds a mock harness from the CURRENT live.html at run time (Drive save and Anthropic API mocked),
-// so the test never drifts from the page it is testing.
+// Builds a mock harness from the CURRENT live.html at run time, so the test never drifts from the page it is testing.
+// Ported 23 Nov 2026 (hub review 906) to the lane-only page: the model path is the shared gate mock tests/gate_mock.js (per-task scripted replies keyed by the request's metadata.hub_task), the transcript
+// is saved by the 11 Nov call store (an in-page Drive upload mock records the files), and New call goes through the Drive-signed-out question (#clearAnyway). The OpenRouter and Claude-fallback checks
+// were retired by the 10 Nov lane-only change and MEETING SIDEKICK / NO FALLBACK (9 Nov): see tests/README.md. All names and captions below are invented; there is no client text.
+// Output: check names and PASS/FAIL only (no detail values), so a run never prints caption text or names.
 const fs = require('fs'), os = require('os'), path = require('path');
 const { chromium } = require('playwright');
+const { initGate, initScripted } = require('./gate_mock');
 
 const SRC = path.join(__dirname, '..', 'live.html');
 let html = fs.readFileSync(SRC, 'utf8');
+const WRAP_MAX = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'routing.json'), 'utf8')).tasks.wrap.max_tokens;   // never a literal: the page (file://, built-in copy) and routing.json agree by lane_static_test.py
 
 // Each patch must match exactly once, or the test fails loudly (the page changed shape: update the patch).
 const patches = [
@@ -25,284 +30,294 @@ const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sk-test-'));
 const harness = path.join(dir, 'harness.html');
 fs.writeFileSync(harness, html);
 
+const HUBKEY = 'hub' + '-test-' + 'key';
+const FLOOR = 47;   // the check count of a clean run, before the floor check itself; raise it by hand when a check is added (a lower count means a scenario stopped early)
 const results = [];
-const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail });
+const check = (name, ok) => results.push({ name, ok: !!ok });
+
+// ---- in-page helpers (serialised by Playwright: they use nothing outside themselves) ----
+// records every Content-Security-Policy violation (a request to a host outside connect-src never reaches the network, so the route guard alone cannot see it)
+function initCsp() {
+  window.__csp = [];
+  document.addEventListener('securitypolicyviolation', e => { window.__csp.push(String(e.blockedURI || '')); });
+}
+// Drive and Google sign-in, mocked in the page: window.google stub plus the Drive upload endpoints of the 11 Nov call store (creates and patches are recorded); a list call answers with no files.
+function initDriveUp() {
+  const up = window.__up = { creates: [], patches: [], other: 0 };
+  window.google = { accounts: { oauth2: { initTokenClient: c => ({ requestAccessToken() { c.callback({ access_token: 'tok', expires_in: 3600 }); } }) } } };
+  const prev = window.fetch.bind(window);
+  const J = o => Promise.resolve(new Response(JSON.stringify(o), { status: 200, headers: { 'content-type': 'application/json' } }));
+  window.fetch = function (url, opts) {
+    url = String(url); opts = opts || {};
+    if (url.startsWith('https://www.googleapis.com/upload/drive/v3/files')) {
+      const body = String(opts.body || ''), m = String(opts.method || 'GET').toUpperCase();
+      if (m === 'POST') {
+        const b = body.split('\r\n')[0], mark = 'Content-Type: text/plain; charset=UTF-8\r\n\r\n', i = body.indexOf(mark);
+        let text = i < 0 ? '' : body.slice(i + mark.length); const e = text.lastIndexOf('\r\n' + b + '--'); if (e >= 0) text = text.slice(0, e);
+        up.creates.push({ name: (body.match(/"name":"([^"]*)"/) || [])[1] || '', text });
+        return J({ id: 'f1' });
+      }
+      if (m === 'PATCH') { up.patches.push({ text: body }); return J({ id: 'f1' }); }
+    }
+    if (url.startsWith('https://www.googleapis.com/drive/v3/files')) { up.other++; return J({ files: [] }); }
+    return prev(url, opts);
+  };
+}
+
+// ---- page helper: ONE way to open a page. It always installs the gate mock, the Drive mock (unless o.noDrive), the CSP recorder and the route guard ----
+let browser, openCtx = [];
+async function open(o) {
+  o = o || {};
+  const ctx = await browser.newContext();
+  openCtx.push(ctx);
+  const p = await ctx.newPage();
+  p.errors = []; p.blocked = [];
+  // the guard: local schemes pass; every other request is RECORDED (host only) and aborted
+  await ctx.route('**/*', route => {
+    const u = route.request().url();
+    if (/^(file:|data:|blob:|about:)/.test(u) || /^http:\/\/127\.0\.0\.1[:/]/.test(u)) return route.continue();
+    let h = 'unparsable'; try { h = new URL(u).host; } catch (e) {}
+    p.blocked.push(h);
+    return route.abort();
+  });
+  p.on('pageerror', e => p.errors.push(e.message));
+  p.on('dialog', d => d.accept());
+  await p.addInitScript(initCsp);
+  await p.addInitScript(initGate);
+  if (!o.noDrive) await p.addInitScript(initDriveUp);
+  if (o.script) await p.addInitScript(initScripted, o.script);
+  const stored = Object.assign({ hubkey: HUBKEY, gcid: 'y', gfolder: 'z', names: 'Harsh', cap: 200 }, o.settings || {});
+  await p.addInitScript(s => { try { localStorage.setItem('sidekick_live', JSON.stringify(s)); } catch (e) {} }, stored);
+  if (o.usageCalls != null) await p.addInitScript(n => { try { const d = new Date(), pad = x => (x < 10 ? '0' : '') + x; localStorage.setItem('sidekick_live_usage', JSON.stringify({ day: d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()), calls: n, inTok: 0, cacheTok: 0, outTok: 0 })); } catch (e) {} }, o.usageCalls);
+  if (o.dflt) await p.addInitScript(d => { window.__gate.default = d; }, o.dflt);
+  await p.goto('file://' + harness);
+  await p.waitForTimeout(150);
+  return p;
+}
+// every scenario runs inside sc(): a throw (element missing, timeout) is recorded as one FAIL and the run goes on; the pages it opened are closed
+async function sc(name, fn) {
+  try { await fn(); } catch (e) { check('SCENARIO ERROR (' + name + ')', false); }
+  for (const c of openCtx) { try { await c.close(); } catch (e) {} }
+  openCtx = [];
+}
+const gateLog = p => p.evaluate(() => window.__gate.log.slice());
+const chatCalls = log => log.filter(r => r.method === 'POST' && r.url.endsWith('/v1/chat/completions'));
+const taskCalls = (log, task) => chatCalls(log).filter(r => r.body && r.body.metadata && r.body.metadata.hub_task === 'sidekick-' + task);
+const post = (p, caps) => p.evaluate(c => window.postMessage({ sk: 'cap1', caps: c }, '*'), caps);
+const savesOf = p => p.evaluate(() => (window.__saves || []).slice());
+const uploads = p => p.evaluate(() => window.__up.creates.slice());
+// nothing was sent or attempted to any host other than the mocked gate: the route guard recorded no request and the CSP recorder saw no http(s) violation
+async function clean(p) {
+  const csp = await p.evaluate(() => (window.__csp || []).slice());
+  return p.blocked.length === 0 && !csp.some(u => /^(https?|wss?):/.test(u));
+}
+const sysOf = r => r.body.messages[0].content, userOf = r => r.body.messages[1].content;
+const reply = (text, finish) => (finish ? { text, finish } : { text });
 
 (async () => {
-  const b = await chromium.launch();
-  const p = await b.newPage();
-  const errors = [];
-  p.on('pageerror', e => errors.push(e.message));
-  p.on('dialog', d => d.accept());
-  await p.route('https://api.anthropic.com/**', async r => {
-    await new Promise(x => setTimeout(x, 200));
-    await r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
-      model: 'm', stop_reason: 'end_turn', content: [{ type: 'text', text: 'WRAP TEXT' }], usage: { input_tokens: 1, output_tokens: 1 } }) });
+  browser = await chromium.launch();
+  let p, log, out;
+
+  // 0. control page for the egress guard: a known forbidden request MUST be recorded, or "nothing was sent elsewhere" proves nothing
+  await sc('0 guard control', async () => {
+    p = await open({ noDrive: true });
+    await p.evaluate(() => { fetch('https://example.com/ctl').catch(() => {}); fetch('https://www.googleapis.com/drive/v3/files/ctl').catch(() => {}); });
+    await p.waitForTimeout(400);
+    const csp = await p.evaluate(() => window.__csp.slice());
+    check('Guard control: a request the CSP allows but the suite does not mock (Drive) is recorded and aborted by the route guard', p.blocked.indexOf('www.googleapis.com') >= 0);
+    check('Guard control: a request to a host the CSP does not allow is recorded by the violation recorder', csp.some(u => /example\.com/.test(u)));
+    check('Guard control: clean() reports the control page as NOT clean', !(await clean(p)));
   });
-  await p.addInitScript(() => {
-    localStorage.setItem('sidekick_live', JSON.stringify({ apikey: 'x', gcid: 'y', gfolder: 'z', names: 'Harsh', mFast: 'f', mSmart: 's', cap: 200 }));
+
+  // Scenarios 1-3: wrap, then Save clicked 4 times fast -> exactly one wrap file and one transcript file; New call (Drive is signed out, so the page asks and he taps "clear anyway");
+  // Teams resends old captions (same ids), then a new caption with a recycled id; Teams re-sends captions already shown under new ids -> no duplicate lines.
+  await sc('1-3 save, new call, re-sent captions', async () => {
+    p = await open();
+    const caps = [];
+    for (let i = 0; i < 5; i++) caps.push({ id: 'c' + i, author: 'Colleague, Test', text: 'old call line ' + i });
+    await post(p, caps);
+    await p.waitForTimeout(300);
+    await p.click('#wrapBtn');
+    await p.waitForTimeout(900);
+    for (let i = 0; i < 4; i++) await p.evaluate(() => document.getElementById('saveWrap').click());
+    await p.waitForTimeout(1200);
+    const saves = await savesOf(p), ups = await uploads(p);
+    log = await gateLog(p);
+    check('Save x4 writes one wrap', saves.filter(s => /^wrap-/.test(s)).length === 1 && taskCalls(log, 'wrap').length >= 1);
+    check('Save x4 creates one transcript file', ups.filter(u => /^transcript-live-/.test(u.name)).length === 1);
+    await p.click('#newCall');
+    await p.click('#clearAnyway');
+    await p.waitForTimeout(200);
+    await post(p, caps);
+    await p.waitForTimeout(200);
+    await p.evaluate(() => window.postMessage({ sk: 'cap1', caps: [{ id: 'c1', author: 'Colleague, Other', text: 'new call first line' }] }, '*'));
+    await p.waitForTimeout(300);
+    const tx = await p.textContent('#tx');
+    check('New call ignores old captions', !/old call line/.test(tx));
+    check('New call keeps new caption with recycled id', /new call first line/.test(tx));
+    const before = await p.evaluate(() => document.getElementById('txCount').textContent);
+    await p.evaluate(() => window.postMessage({ sk: 'cap1', caps: [{ id: 'z9', author: 'Colleague, Other', text: 'new call first line' }] }, '*'));
+    await p.waitForTimeout(300);
+    const after = await p.evaluate(() => document.getElementById('txCount').textContent);
+    check('Re-sent caption with a new id is not duplicated', before === after && after === '1');
+    check('No page errors (save, New call, re-sent captions)', p.errors.length === 0);
+    check('Save, New call and re-sent captions: nothing was sent or attempted to any host other than the mocked gate', await clean(p));
   });
-  await p.goto('file://' + harness);
 
-  // Scenario 1: wrap, then Save clicked 4 times fast -> exactly one wrap file and one transcript file.
-  const caps = [];
-  for (let i = 0; i < 5; i++) caps.push({ id: 'c' + i, author: 'Colleague, Test', text: 'old call line ' + i });
-  await p.evaluate(c => window.postMessage({ sk: 'cap1', caps: c }, '*'), caps);
-  await p.waitForTimeout(300);
-  await p.click('#wrapBtn');
-  await p.waitForTimeout(600);
-  for (let i = 0; i < 4; i++) await p.evaluate(() => document.getElementById('saveWrap').click());
-  await p.waitForTimeout(1200);
-  const saves = await p.evaluate(() => (window.__saves || []).slice());
-  const wraps = saves.filter(s => /wrap/i.test(s)).length;
-  const txs = saves.filter(s => /transcript/i.test(s)).length;
-  check('Save x4 writes one wrap', wraps === 1, saves);
-  check('Save x4 writes one transcript', txs === 1, saves);
-
-  // Scenario 2: New call, Teams resends old captions (same ids), then a new caption with a recycled id.
-  await p.click('#newCall');
-  await p.waitForTimeout(200);
-  await p.evaluate(c => window.postMessage({ sk: 'cap1', caps: c }, '*'), caps);
-  await p.waitForTimeout(200);
-  await p.evaluate(() => window.postMessage({ sk: 'cap1', caps: [{ id: 'c1', author: 'Colleague, Other', text: 'new call first line' }] }, '*'));
-  await p.waitForTimeout(300);
-  const tx = await p.textContent('#tx');
-  check('New call ignores old captions', !/old call line/.test(tx), tx.slice(0, 200));
-  check('New call keeps new caption with recycled id', /new call first line/.test(tx), tx.slice(0, 200));
-
-  // Scenario 3: Teams re-sends captions already shown, under new ids -> no duplicate lines.
-  const before = await p.evaluate(() => document.getElementById('txCount').textContent);
-  await p.evaluate(() => window.postMessage({ sk: 'cap1', caps: [{ id: 'z9', author: 'Colleague, Other', text: 'new call first line' }] }, '*'));
-  await p.waitForTimeout(300);
-  const after = await p.evaluate(() => document.getElementById('txCount').textContent);
-  check('Re-sent caption with a new id is not duplicated', before === after, { before, after });
-
-  check('No page errors', errors.length === 0, errors);
-
-  // Scenario 4: the AI API keeps failing -> no retry storm, failures not counted as calls, pause shown.
-  const p2 = await b.newPage();
-  const errs2 = [];
-  p2.on('pageerror', e => errs2.push(e.message));
-  let apiHits = 0;
-  await p2.route('https://api.anthropic.com/**', async r => { apiHits++; await r.fulfill({ status: 401, contentType: 'application/json', body: JSON.stringify({ error: { message: 'invalid x-api-key' } }) }); });
-  await p2.addInitScript(() => {
-    localStorage.setItem('sidekick_live', JSON.stringify({ apikey: 'x', gcid: 'y', gfolder: 'z', names: 'Harsh', mFast: 'f', mSmart: 's', cap: 200 }));
+  // Scenario 4: the gate keeps rejecting the key -> no retry storm, failed calls not counted as calls, failures shown.
+  await sc('4 failing AI', async () => {
+    p = await open({ dflt: 'http401' });
+    const many = []; for (let i = 0; i < 60; i++) many.push({ id: 'm' + i, author: 'Speaker ' + (i % 4), text: 'status line number ' + i + ' about the release' });
+    await post(p, many);
+    await p.waitForTimeout(8000);
+    const pill = await p.textContent('#aiPill'), n = chatCalls(await gateLog(p)).length;
+    check('Failing AI: no retry storm (1 to 3 gate chat calls in 8 s)', n >= 1 && n <= 3);
+    check('Failing AI: failed calls not counted toward the cap', /AI: 0 calls today/.test(pill));
+    check('Failing AI: failures shown on the pill', /failed/.test(pill));
+    check('Failing AI: no page errors', p.errors.length === 0);
+    check('Failing AI: nothing was sent or attempted to any host other than the mocked gate', await clean(p));
   });
-  await p2.goto('file://' + harness);
-  const many = []; for (let i = 0; i < 60; i++) many.push({ id: 'm' + i, author: 'Speaker ' + (i % 4), text: 'status line number ' + i + ' about the release' });
-  await p2.evaluate(c => window.postMessage({ sk: 'cap1', caps: c }, '*'), many);
-  await p2.waitForTimeout(8000);
-  const pill = await p2.textContent('#aiPill');
-  check('Failing AI: no retry storm (at most 3 API hits in 8 s)', apiHits <= 3, { apiHits });
-  check('Failing AI: failed calls not counted toward the cap', /AI: 0 calls today/.test(pill), pill);
-  check('Failing AI: failures shown on the pill', /failed/.test(pill), pill);
-  check('Failing AI: no page errors', errs2.length === 0, errs2);
+
   // Scenario 5: a saved usage count made only of failed calls (old version) does not keep the cap blocked after reload.
-  const p3 = await b.newPage();
-  await p3.addInitScript(() => {
-    localStorage.setItem('sidekick_live', JSON.stringify({ apikey: 'x', gcid: 'y', gfolder: 'z', names: 'Harsh', mFast: 'f', mSmart: 's', cap: 200 }));
-    const d = new Date(); const pad = n => (n < 10 ? '0' : '') + n;
-    localStorage.setItem('sidekick_live_usage', JSON.stringify({ day: d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()), calls: 200, inTok: 0, cacheTok: 0, outTok: 0 }));
+  await sc('5 old usage', async () => {
+    p = await open({ usageCalls: 200 });
+    const pill = await p.textContent('#aiPill');
+    check('Old failed-only usage no longer blocks the cap', /AI: 0 calls today/.test(pill) && /200 failed/.test(pill));
   });
-  await p3.goto('file://' + harness);
-  const pill3 = await p3.textContent('#aiPill');
-  check('Old failed-only usage no longer blocks the cap', /AI: 0 calls today/.test(pill3) && /200 failed/.test(pill3), pill3);
 
   // Scenario 6: the wrap reply hits the length limit once -> retried with more room, full wrap shown and saved (3 Nov PBR: 435-byte wrap saved).
-  const mkPage = async (handler) => {
-    const pg = await b.newPage();
-    const errs = []; pg.on('pageerror', e => errs.push(e.message)); pg.on('dialog', d => d.accept());
-    const reqs = [];
-    await pg.route('https://api.anthropic.com/**', async r => { const body = JSON.parse(r.request().postData() || '{}'); reqs.push(body.max_tokens); await r.fulfill(handler(reqs.length, body)); });
-    await pg.addInitScript(() => { localStorage.setItem('sidekick_live', JSON.stringify({ apikey: 'x', gcid: 'y', gfolder: 'z', names: 'Harsh', mFast: 'f', mSmart: 's', cap: 200 })); });
-    await pg.goto('file://' + harness);
-    await pg.evaluate(c => window.postMessage({ sk: 'cap1', caps: c }, '*'), [{ id: 'w1', author: 'Colleague, Test', text: 'wrap test line' }]);
-    await pg.waitForTimeout(300);
-    return { pg, errs, reqs };
-  };
-  const reply = (text, stop) => ({ status: 200, contentType: 'application/json', body: JSON.stringify({ model: 'm', stop_reason: stop, content: [{ type: 'text', text }], usage: { input_tokens: 1, output_tokens: 1 } }) });
-  const s6 = await mkPage((n) => n === 1 ? reply('PARTIAL WRAP', 'max_tokens') : reply('FULL WRAP TEXT', 'end_turn'));
-  await s6.pg.click('#wrapBtn');
-  await s6.pg.waitForTimeout(1500);
-  const out6 = await s6.pg.textContent('#wrapOut');
-  await s6.pg.evaluate(() => document.getElementById('saveWrap').click());
-  await s6.pg.waitForTimeout(900);
-  const saves6 = await s6.pg.evaluate(() => (window.__saves || []).slice());
-  check('Cut-short wrap is retried with more room', s6.reqs.length === 2 && s6.reqs[1] > s6.reqs[0], s6.reqs);
-  check('Cut-short wrap: the full wrap is shown, not the partial', out6.trim() === 'FULL WRAP TEXT', out6);
-  check('Cut-short wrap: Save writes one wrap after the retry', saves6.filter(s => /wrap/i.test(s)).length === 1, saves6);
-  check('Cut-short wrap: no page errors', s6.errs.length === 0, s6.errs);
+  await sc('6 cut-short wrap', async () => {
+    p = await open({ script: { wrap: [reply('PARTIAL WRAP', 'length'), reply('FULL WRAP TEXT')] } });
+    await post(p, [{ id: 'w1', author: 'Colleague, Test', text: 'wrap test line' }]);
+    await p.waitForTimeout(300);
+    await p.click('#wrapBtn');
+    await p.waitForTimeout(1500);
+    const out6 = await p.textContent('#wrapOut'), w = taskCalls(await gateLog(p), 'wrap');
+    await p.evaluate(() => document.getElementById('saveWrap').click());
+    await p.waitForTimeout(900);
+    const saves = await savesOf(p);
+    check('Cut-short wrap is retried with more room', w.length === 2 && w[0].body.max_tokens === WRAP_MAX && w[1].body.max_tokens > w[0].body.max_tokens);
+    check('Cut-short wrap: the full wrap is shown, not the partial', out6.trim() === 'FULL WRAP TEXT');
+    check('Cut-short wrap: Save writes one wrap after the retry', saves.filter(s => /^wrap-/.test(s)).length === 1);
+    check('Cut-short wrap: no page errors', p.errors.length === 0);
+    check('Cut-short wrap: nothing was sent or attempted to any host other than the mocked gate', await clean(p));
+  });
 
   // Scenario 7: every reply hits the length limit -> at most 3 tries, partial shown with a clear "cut short" note.
-  const s7 = await mkPage(() => reply('STILL PARTIAL', 'max_tokens'));
-  await s7.pg.click('#wrapBtn');
-  await s7.pg.waitForTimeout(2000);
-  const out7 = await s7.pg.textContent('#wrapOut');
-  check('Always cut short: at most 3 tries', s7.reqs.length <= 3, s7.reqs);
-  check('Always cut short: the wrap is marked as cut short', /STILL PARTIAL/.test(out7) && /Cut short/.test(out7), out7);
-
-  // Scenario 8: an open question to the room about how the platform works (3 Nov PBR, Chancey on picklist order)
-  // -> room card explains it; nothing lands in "Asked of you"; tracker rules stay strict.
-  const room = JSON.stringify({ relevant: true, explain: 'ROOM EXPLAIN', say: 'ROOM SAY', check: 'ROOM CHECK', confidence: 'high' });
-  const mkRoom = async () => {
-    const pg = await b.newPage();
-    const errs = []; pg.on('pageerror', e => errs.push(e.message));
-    const bodies = [];
-    await pg.route('https://api.anthropic.com/**', async r => { const body = r.request().postData() || ''; bodies.push(body); await r.fulfill(reply(/PLATFORM MODE/.test(body) ? room : '{"for_me": false}', 'end_turn')); });
-    await pg.addInitScript(() => { localStorage.setItem('sidekick_live', JSON.stringify({ apikey: 'x', gcid: 'y', gfolder: 'z', names: 'Harsh', mFast: 'f', mSmart: 's', cap: 200 })); });
-    await pg.goto('file://' + harness);
-    const crowd = []; for (let i = 0; i < 6; i++) crowd.push({ id: 'p' + i, author: 'Person ' + i + ', Big', text: 'general discussion line number ' + i });
-    await pg.evaluate(c => window.postMessage({ sk: 'cap1', caps: c }, '*'), crowd);
-    await pg.waitForTimeout(300);
-    return { pg, errs, bodies };
-  };
-  const s8 = await mkRoom();
-  const ask8 = await s8.pg.textContent('#askWho');
-  await s8.pg.evaluate(() => window.postMessage({ sk: 'cap1', caps: [{ id: 'q1', author: 'Thompson, Chancey', text: 'Does anybody know, or can educate me on how this list order kind of works?' }] }, '*'));
-  await s8.pg.waitForTimeout(5000); // lines are checked once they have been stable for 2.5 s
-  const roomA8 = await s8.pg.textContent('#roomA'), roomSay8 = await s8.pg.textContent('#roomSay');
-  check('Room question: explanation shown in the chip-in card', /ROOM EXPLAIN/.test(roomA8) && /ROOM CHECK/.test(roomA8) && /ROOM SAY/.test(roomSay8), { roomA8, roomSay8 });
-  check('Room question: sent in platform mode', s8.bodies.some(x => /PLATFORM MODE/.test(x)), s8.bodies.length);
-  check('Room question: no "Asked of you" alert', (await s8.pg.textContent('#askWho')) === ask8, await s8.pg.textContent('#askWho'));
-  const sys8 = s8.bodies.length ? JSON.parse(s8.bodies[0]).system[0].text : '';
-  check('Tracker rule unchanged: never invent status, owners, dates or decisions', /Never invent status, owners, dates or decisions/.test(sys8) && /PLATFORM MODE only/.test(sys8), sys8.slice(0, 80));
-  check('Current-state rule: "now" and "court" win over older log lines', /"now" field/.test(sys8) && /win over any older log line/.test(sys8), sys8.slice(0, 80));
-
-  // Scenario 9: ordinary chatter on a big call -> no AI call at all.
-  const s9 = await mkRoom();
-  await s9.pg.evaluate(() => window.postMessage({ sk: 'cap1', caps: [{ id: 'c9', author: 'Wegener, Hanna', text: 'Thanks everyone, that was helpful, talk to you all tomorrow.' }] }, '*'));
-  await s9.pg.waitForTimeout(4000);
-  check('Ordinary chatter: no AI call', s9.bodies.length === 0, s9.bodies.length);
-
-  // Scenario 10: the Explain button answers the last question even when the trigger missed it.
-  await s9.pg.evaluate(() => window.postMessage({ sk: 'cap1', caps: [{ id: 'c10', author: 'Katagi, Sachin', text: 'So the yellow ones are enabled for that type?' }] }, '*'));
-  await s9.pg.waitForTimeout(400);
-  const before10 = s9.bodies.length;
-  await s9.pg.click('#explainBtn');
-  await s9.pg.waitForTimeout(1000);
-  check('Explain button: answers the last question', s9.bodies.length === before10 + 1 && /ROOM EXPLAIN/.test(await s9.pg.textContent('#roomA')) && /yellow ones/.test(await s9.pg.textContent('#roomQ')), await s9.pg.textContent('#roomQ'));
-  check('Room questions: no page errors', s8.errs.length === 0 && s9.errs.length === 0, s8.errs.concat(s9.errs));
-
-  // Scenario 11 (5 Nov 2026, sk03): model ids with a "/" go to OpenRouter with no-retention routing; Claude is not called.
-  const orPage = async (orHandler) => {
-    const pg = await b.newPage();
-    const errs = []; pg.on('pageerror', e => errs.push(e.message)); pg.on('dialog', d => d.accept());
-    const orBodies = [], anBodies = [];
-    await pg.route('https://openrouter.ai/**', async r => { const body = JSON.parse(r.request().postData() || '{}'); orBodies.push(body); await r.fulfill(orHandler(orBodies.length, body)); });
-    await pg.route('https://api.anthropic.com/**', async r => { anBodies.push(JSON.parse(r.request().postData() || '{}')); await r.fulfill(reply('CLAUDE WRAP', 'end_turn')); });
-    await pg.addInitScript(() => { localStorage.setItem('sidekick_live', JSON.stringify({ apikey: 'x', orkey: 'k', gcid: 'y', gfolder: 'z', names: 'Harsh', mFast: 'openai/fast', mSmart: 'openai/smart', cap: 200 })); });
-    await pg.goto('file://' + harness);
-    await pg.evaluate(c => window.postMessage({ sk: 'cap1', caps: c }, '*'), [{ id: 'o1', author: 'Colleague, Test', text: 'openrouter test line' }]);
-    await pg.waitForTimeout(300);
-    return { pg, errs, orBodies, anBodies };
-  };
-  const orReply = (text, fin) => ({ status: 200, contentType: 'application/json', body: JSON.stringify({ model: 'openai/smart', choices: [{ finish_reason: fin, message: { role: 'assistant', content: text } }], usage: { prompt_tokens: 1000, completion_tokens: 5 } }) });
-  const s11 = await orPage(() => orReply('OR WRAP', 'stop'));
-  await s11.pg.click('#wrapBtn');
-  await s11.pg.waitForTimeout(1200);
-  const w11 = s11.orBodies.find(x => x.model === 'openai/smart');
-  check('OpenRouter: wrap answered by the "/" model', (await s11.pg.textContent('#wrapOut')).trim() === 'OR WRAP' && !!w11, s11.orBodies.map(x => x.model));
-  check('OpenRouter: no-retention routing sent on every call', s11.orBodies.length > 0 && s11.orBodies.every(x => x.provider && x.provider.data_collection === 'deny'), s11.orBodies.map(x => x.provider));
-  check('OpenRouter: Claude not called', s11.anBodies.length === 0, s11.anBodies.length);
-  check('OpenRouter: usage shown on the pill', /OpenRouter \d+k in/.test(await s11.pg.textContent('#aiPill')), await s11.pg.textContent('#aiPill'));
-
-  // Scenario 12: OpenRouter cut short once -> retried with more room.
-  const s12 = await orPage((n) => n === 1 ? orReply('PART', 'length') : orReply('FULL OR WRAP', 'stop'));
-  await s12.pg.click('#wrapBtn');
-  await s12.pg.waitForTimeout(1500);
-  check('OpenRouter cut short: retried with more room', s12.orBodies.length >= 2 && s12.orBodies[1].max_tokens > s12.orBodies[0].max_tokens && (await s12.pg.textContent('#wrapOut')).trim() === 'FULL OR WRAP', s12.orBodies.map(x => x.max_tokens));
-
-  // Scenario 13: OpenRouter keeps failing -> after 2 failures the call switches to the Claude fallback model; New call resets.
-  const s13 = await orPage(() => ({ status: 503, contentType: 'application/json', body: JSON.stringify({ error: { message: 'no providers' } }) }));
-  await s13.pg.click('#wrapBtn');
-  await s13.pg.waitForTimeout(4500);
-  const pill13 = await s13.pg.textContent('#aiPill');
-  check('OpenRouter down: wrap still answered by Claude', (await s13.pg.textContent('#wrapOut')).trim() === 'CLAUDE WRAP', await s13.pg.textContent('#wrapOut'));
-  check('OpenRouter down: fallback is the Claude answer model', s13.anBodies.length >= 1 && s13.anBodies.every(x => x.model === 'claude-sonnet-5-5'), s13.anBodies.map(x => x.model));
-  check('OpenRouter down: at most 2 OpenRouter tries before switching', s13.orBodies.length <= 2, s13.orBodies.length);
-  check('OpenRouter down: shown on the pill', /OpenRouter down/.test(pill13), pill13);
-  await s13.pg.click('#newCall');
-  await s13.pg.waitForTimeout(200);
-  check('OpenRouter down: New call goes back to OpenRouter', !/OpenRouter down/.test(await s13.pg.textContent('#aiPill')), await s13.pg.textContent('#aiPill'));
-  check('OpenRouter: no page errors', s11.errs.length === 0 && s12.errs.length === 0 && s13.errs.length === 0, s11.errs.concat(s12.errs, s13.errs));
-
-  // Scenario 14 (6 Nov 2026): the same OpenRouter id in both boxes (openrouter/auto) -> the wrap still falls back to the answer model.
-  const s14 = await b.newPage();
-  const errs14 = []; s14.on('pageerror', e => errs14.push(e.message)); s14.on('dialog', d => d.accept());
-  const an14 = [];
-  await s14.route('https://openrouter.ai/**', r => r.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ error: { message: 'no providers' } }) }));
-  await s14.route('https://api.anthropic.com/**', async r => { an14.push(JSON.parse(r.request().postData() || '{}')); await r.fulfill(reply('CLAUDE WRAP', 'end_turn')); });
-  await s14.addInitScript(() => { localStorage.setItem('sidekick_live', JSON.stringify({ apikey: 'x', orkey: 'k', gcid: 'y', gfolder: 'z', names: 'Harsh', mFast: 'openrouter/auto', mSmart: 'openrouter/auto', cap: 200 })); });
-  await s14.goto('file://' + harness);
-  await s14.evaluate(c => window.postMessage({ sk: 'cap1', caps: c }, '*'), [{ id: 'a1', author: 'Colleague, Test', text: 'auto router test line' }]);
-  await s14.waitForTimeout(300);
-  await s14.click('#wrapBtn');
-  await s14.waitForTimeout(4500);
-  check('Same id in both boxes: wrap falls back to the answer model (Sonnet), not Haiku', an14.length >= 1 && an14.every(x => x.model === 'claude-sonnet-5-5') && (await s14.textContent('#wrapOut')).trim() === 'CLAUDE WRAP', an14.map(x => x.model));
-  check('Same id in both boxes: no page errors', errs14.length === 0, errs14);
-
-  // Scenario 15 (6 Nov 2026 follow-up call): the same ask repeated by Pawan and Pratyush within 2 minutes
-  // -> one gate check per 15 s using the newest line, one answer, one alert marked "asked again".
-  const s15 = await b.newPage();
-  const errs15 = []; s15.on('pageerror', e => errs15.push(e.message));
-  let gates15 = 0, answers15 = 0;
-  await s15.route('https://api.anthropic.com/**', async r => {
-    const body = r.request().postData() || '';
-    if (/Is Harsh being asked a question/.test(body)) { gates15++; return r.fulfill(reply('{"for_me": true, "kind": "question", "ask": "can CM and FS do the work order component placement together"}', 'end_turn')); }
-    if (/Give him what to say now/.test(body)) { answers15++; return r.fulfill(reply('{"say": "SAY ONE"}', 'end_turn')); }
-    return r.fulfill(reply('{"for_me": false}', 'end_turn'));
+  await sc('7 always cut short', async () => {
+    p = await open({ script: { wrap: [reply('STILL PARTIAL', 'length'), reply('STILL PARTIAL', 'length'), reply('STILL PARTIAL', 'length')] } });
+    await post(p, [{ id: 'w1', author: 'Colleague, Test', text: 'wrap test line' }]);
+    await p.waitForTimeout(300);
+    await p.click('#wrapBtn');
+    await p.waitForTimeout(2000);
+    const out7 = await p.textContent('#wrapOut'), n = taskCalls(await gateLog(p), 'wrap').length;
+    check('Always cut short: 2 to 3 gate wrap calls (one retry with more room, never more than 3 tries)', n >= 2 && n <= 3);
+    check('Always cut short: the wrap is marked as cut short', /STILL PARTIAL/.test(out7) && /Cut short/.test(out7));
   });
-  await s15.addInitScript(() => { localStorage.setItem('sidekick_live', JSON.stringify({ apikey: 'x', gcid: 'y', gfolder: 'z', names: 'Harsh', mFast: 'f', mSmart: 's', cap: 200 })); });
-  await s15.goto('file://' + harness);
-  const rep15 = [
-    { id: 'd1', author: 'Mangoli, Pawan', text: 'Harsh, can we coordinate and do the work order placement together?' },
-    { id: 'd2', author: 'Mangoli, Pawan', text: 'Or is it OK for us to place that component on the work order, Harsh?' },
-    { id: 'd3', author: 'Sahu, Pratyush', text: 'Harsh, what is your thought on doing the placement together?' },
-  ];
-  for (const c of rep15) { await s15.evaluate(x => window.postMessage({ sk: 'cap1', caps: [x] }, '*'), c); await s15.waitForTimeout(1200); }
-  await s15.waitForTimeout(22000);
-  const list15 = await s15.textContent('#alertList');
-  const n15 = (list15.match(/Say: /g) || []).length;
-  check('Repeated ask: at most 2 gate checks for 3 lines in 4 s', gates15 >= 1 && gates15 <= 2, gates15);
-  check('Repeated ask: one answer call', answers15 === 1, answers15);
-  check('Repeated ask: one alert, marked asked again', n15 === 1 && /Asked 2 times/.test(list15), list15.slice(0, 300));
-  check('Repeated ask: no page errors', errs15.length === 0, errs15);
 
-  // Scenario 16 (6 Nov 2026): the bookmark reports the Teams tab hidden -> warning on the pill, and the
-  // saved transcript ends with a capture-health line naming the hidden span; an old bookmark gets a note.
-  const s16 = await b.newPage();
-  const errs16 = []; s16.on('pageerror', e => errs16.push(e.message)); s16.on('dialog', d => d.accept());
-  await s16.route('https://api.anthropic.com/**', r => r.fulfill(reply('WRAP16', 'end_turn')));
-  await s16.addInitScript(() => { localStorage.setItem('sidekick_live', JSON.stringify({ apikey: 'x', gcid: 'y', gfolder: 'z', names: 'Harsh', mFast: 'f', mSmart: 's', cap: 200 })); });
-  await s16.goto('file://' + harness);
-  const msg16 = (hidden, caps) => s16.evaluate(m => window.postMessage(m, '*'), { sk: 'cap1', v: 12, hidden, caps });
-  await msg16(false, [{ id: 'h1', author: 'Colleague, Test', text: 'first line while Teams is visible' }]);
-  await s16.waitForTimeout(600);
-  for (let i = 0; i < 4; i++) { await msg16(true, [{ id: 'h1', author: 'Colleague, Test', text: 'first line while Teams is visible' }]); await s16.waitForTimeout(700); }
-  const pill16 = await s16.textContent('#capPill');
-  await msg16(false, [{ id: 'h2', author: 'Colleague, Test', text: 'second line after Teams is visible again' }]);
-  await s16.waitForTimeout(1200);
-  const pill16b = await s16.textContent('#capPill');
-  await s16.click('#wrapBtn'); await s16.waitForTimeout(800);
-  await s16.evaluate(() => document.getElementById('saveWrap').click()); await s16.waitForTimeout(900);
-  const tx16 = await s16.evaluate(() => { const o = window.__saveTexts || {}; const k = Object.keys(o).find(n => /transcript/.test(n)); return k ? o[k] : ''; });
-  check('Teams hidden: pill warns to keep Teams visible', /Teams hidden \d+ s/.test(pill16), pill16);
-  check('Teams visible again: pill back to live', /Captions: live/.test(pill16b), pill16b);
-  check('Saved transcript ends with capture health naming the hidden span', /capture health: bookmark v12; Teams hidden 1 time\(s\)/.test(tx16), tx16.slice(-200));
-  const s16b = await b.newPage(); const errs16b = []; s16b.on('pageerror', e => errs16b.push(e.message));
-  await s16b.addInitScript(() => { localStorage.setItem('sidekick_live', JSON.stringify({ apikey: 'x', gcid: 'y', gfolder: 'z', names: 'Harsh', mFast: 'f', mSmart: 's', cap: 200 })); });
-  await s16b.goto('file://' + harness);
-  await s16b.evaluate(m => window.postMessage(m, '*'), { sk: 'cap1', v: 11, caps: [{ id: 'o1', author: 'A, B', text: 'old bookmark line' }] });
-  await s16b.waitForTimeout(400);
-  check('Old bookmark: note to update it', /Update the Sidekick bookmark/.test(await s16b.textContent('#banner')), await s16b.textContent('#banner'));
-  check('Capture health: no page errors', errs16.length === 0 && errs16b.length === 0, errs16.concat(errs16b));
-  await b.close();
+  // Scenario 8: an open question to the room about how the platform works (3 Nov PBR pattern, invented asker)
+  // -> room card explains it; nothing lands in "Asked of you"; tracker rules stay strict.
+  const ROOM = JSON.stringify({ relevant: true, explain: 'ROOM EXPLAIN', say: 'ROOM SAY', check: 'ROOM CHECK', confidence: 'high' });
+  const roomPage = async () => {
+    const pg = await open({ script: { room: [reply(ROOM)] } });
+    const crowd = []; for (let i = 0; i < 6; i++) crowd.push({ id: 'p' + i, author: 'Person ' + i + ', Big', text: 'general discussion line number ' + i });
+    await post(pg, crowd);
+    await pg.waitForTimeout(300);
+    return pg;
+  };
+  await sc('8 room question', async () => {
+    p = await roomPage();
+    const ask8 = await p.textContent('#askWho');
+    await p.evaluate(() => window.postMessage({ sk: 'cap1', caps: [{ id: 'q1', author: 'Example, Pat', text: 'Does anybody know how the sample list order works?' }] }, '*'));
+    await p.waitForTimeout(5000);   // lines are checked once they have been stable for 2.5 s
+    const roomA = await p.textContent('#roomA'), roomSay = await p.textContent('#roomSay'), rc = taskCalls(await gateLog(p), 'room');
+    check('Room question: explanation shown in the chip-in card', /ROOM EXPLAIN/.test(roomA) && /ROOM CHECK/.test(roomA) && /ROOM SAY/.test(roomSay));
+    check('Room question: sent in platform mode', rc.length >= 1 && /PLATFORM MODE/.test(userOf(rc[0])));
+    check('Room question: no "Asked of you" alert', rc.length >= 1 && (await p.textContent('#askWho')) === ask8);
+    const sys8 = rc.length ? sysOf(rc[0]) : '';
+    check('Tracker rule unchanged: never invent status, owners, dates or decisions', /Never invent status, owners, dates or decisions/.test(sys8) && /PLATFORM MODE only/.test(sys8));
+    check('Current-state rule: "now" and "court" win over older log lines', /"now" field/.test(sys8) && /win over any older log line/.test(sys8));
+    check('Room question: no page errors', p.errors.length === 0);
+    check('Room question: nothing was sent or attempted to any host other than the mocked gate', await clean(p));
+  });
 
+  // Scenarios 9 and 10 (one page): ordinary chatter on a big call -> no AI call at all; then the Explain button answers the last question even when the trigger missed it.
+  await sc('9-10 chatter and explain button', async () => {
+    p = await roomPage();
+    await p.evaluate(() => window.postMessage({ sk: 'cap1', caps: [{ id: 'c8', author: 'Sample, Sam', text: 'Is the sample demo ready by now?' }] }, '*'));   // an EARLIER question that the Explain button must not pick
+    await p.waitForTimeout(300);
+    await p.evaluate(() => window.postMessage({ sk: 'cap1', caps: [{ id: 'c9', author: 'Demo, Riley', text: 'Thanks everyone, that was helpful, talk to you all tomorrow.' }] }, '*'));
+    await p.waitForTimeout(4000);
+    const chatter = chatCalls(await gateLog(p)).length;
+    await p.evaluate(() => window.postMessage({ sk: 'cap1', caps: [{ id: 'c10', author: 'Tester, Alex', text: 'So the blue ones are on for that kind?' }] }, '*'));
+    await p.waitForTimeout(400);
+    const before10 = chatCalls(await gateLog(p)).length;
+    await p.click('#explainBtn');
+    await p.waitForTimeout(1000);
+    check('Ordinary chatter: no AI call', chatter === 0);
+    check('Explain button: answers the last question', chatCalls(await gateLog(p)).length === before10 + 1 && taskCalls(await gateLog(p), 'room').length === 1 && /ROOM EXPLAIN/.test(await p.textContent('#roomA')) && /blue ones/.test(await p.textContent('#roomQ')));
+    check('Chatter and Explain button: no page errors', p.errors.length === 0);
+    check('Chatter and Explain button: nothing was sent or attempted to any host other than the mocked gate', await clean(p));
+  });
+
+  // Scenarios 11-14 of the old suite (OpenRouter routing, the Claude fallback model, the same id in both model boxes) are RETIRED or moved: the page is lane only since 10 Nov and has no fallback
+  // (MEETING SIDEKICK / NO FALLBACK, 9 Nov). Their lane successors live in tests/lane_test.js (the hub cannot be reached: the lane stops for the call and says so). See tests/README.md.
+
+  // Scenario 15 (invented repeat of the 6 Nov follow-up pattern): the same ask repeated by two people within 2 minutes
+  // -> one gate check per 15 s using the newest line, one answer, one alert marked "asked again".
+  await sc('15 repeated ask', async () => {
+    const det = JSON.stringify({ for_me: true, kind: 'question', ask: 'can the demo item handover be done together' });
+    p = await open({ script: { detect: [reply(det), reply(det), reply(det)], answer: [reply('{"say": "SAY ONE"}')] } });
+    const rep = [
+      { id: 'd1', author: 'Example, Pat', text: 'Harsh, can we do the demo item handover together?' },
+      { id: 'd2', author: 'Example, Pat', text: 'Or is it OK for us to do the demo item handover, Harsh?' },
+      { id: 'd3', author: 'Sample, Sam', text: 'Harsh, what is your thought on doing the handover together?' },
+    ];
+    for (const c of rep) { await p.evaluate(x => window.postMessage({ sk: 'cap1', caps: [x] }, '*'), c); await p.waitForTimeout(1200); }
+    await p.waitForTimeout(22000);
+    log = await gateLog(p);
+    const list = await p.textContent('#alertList'), n = (list.match(/Say: /g) || []).length;
+    check('Repeated ask: 1 to 2 gate checks for 3 lines in 4 s', taskCalls(log, 'detect').length >= 1 && taskCalls(log, 'detect').length <= 2);
+    check('Repeated ask: one answer call', taskCalls(log, 'answer').length === 1);
+    check('Repeated ask: one alert, marked asked again', n === 1 && /Asked 2 times/.test(list));
+    check('Repeated ask: no page errors', p.errors.length === 0);
+    check('Repeated ask: nothing was sent or attempted to any host other than the mocked gate', await clean(p));
+  });
+
+  // Scenario 16 (6 Nov 2026): the bookmark reports the Teams tab hidden -> warning on the pill, and the saved transcript ends with a capture-health line naming the hidden span.
+  await sc('16 capture health', async () => {
+    p = await open();
+    const msg = (hidden, caps) => p.evaluate(m => window.postMessage(m, '*'), { sk: 'cap1', v: 12, hidden, caps });
+    await msg(false, [{ id: 'h1', author: 'Colleague, Test', text: 'first line while Teams is visible' }]);
+    await p.waitForTimeout(600);
+    for (let i = 0; i < 4; i++) { await msg(true, [{ id: 'h1', author: 'Colleague, Test', text: 'first line while Teams is visible' }]); await p.waitForTimeout(700); }
+    const pill16 = await p.textContent('#capPill');
+    await msg(false, [{ id: 'h2', author: 'Colleague, Test', text: 'second line after Teams is visible again' }]);
+    await p.waitForTimeout(1200);
+    const pill16b = await p.textContent('#capPill');
+    await p.click('#wrapBtn'); await p.waitForTimeout(800);
+    await p.evaluate(() => document.getElementById('saveWrap').click()); await p.waitForTimeout(900);
+    const tx16 = await p.evaluate(() => { const u = window.__up, c = u.creates.filter(x => /^transcript-live-/.test(x.name)); return u.patches.length ? u.patches[u.patches.length - 1].text : (c.length ? c[c.length - 1].text : ''); });
+    check('Teams hidden: pill warns to keep Teams visible', /Teams hidden \d+ s/.test(pill16));
+    check('Teams visible again: pill back to live', /Captions: live/.test(pill16b));
+    check('Saved transcript ends with capture health naming the hidden span', /capture health: bookmark v12; Teams hidden 1 time\(s\)/.test(tx16));
+    check('Capture health: no page errors', p.errors.length === 0);
+    check('Capture health: nothing was sent or attempted to any host other than the mocked gate', await clean(p));
+  });
+  await sc('16b old bookmark', async () => {
+    p = await open();
+    await p.evaluate(m => window.postMessage(m, '*'), { sk: 'cap1', v: 11, caps: [{ id: 'o1', author: 'A, B', text: 'old bookmark line' }] });
+    await p.waitForTimeout(400);
+    const banner = await p.textContent('#banner');
+    check('Old bookmark: note to update it', /Old Sidekick bookmark \(v11\)/.test(banner) && /re-drag the bookmark/.test(banner));
+    check('Old bookmark: no page errors', p.errors.length === 0);
+    check('Old bookmark: nothing was sent or attempted to any host other than the mocked gate', await clean(p));
+  });
+
+  await browser.close();
+  check('suite ran at least ' + FLOOR + ' checks (a lower count means a scenario stopped early)', results.length >= FLOOR);
   let failed = 0;
-  for (const r of results) {
-    console.log(`${r.ok ? 'PASS' : 'FAIL'} ${r.name}${r.ok ? '' : '  ' + JSON.stringify(r.detail)}`);
-    if (!r.ok) failed++;
-  }
+  for (const r of results) { console.log((r.ok ? 'PASS ' : 'FAIL ') + r.name); if (!r.ok) failed++; }
   console.log(failed ? `${failed} check(s) failed: do not commit live.html` : 'All checks passed');
   process.exit(failed ? 1 : 0);
-})().catch(e => { console.log('FAIL run: ' + e.message); process.exit(1); });
+})().catch(e => { console.log('FAIL run'); process.exit(1); });

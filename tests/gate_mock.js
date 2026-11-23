@@ -1,5 +1,5 @@
-// Mock of the hub's door gate for tests/fix_test.js: a COPY of initGate from tests/lane_test.js (which is left as it was); the only addition is the optional
-// window.__gate.script hook (set by initScripted) so a test can choose the text and delay of a reply per task. Without it the mock behaves like lane_test.js's.
+// Mock of the hub's door gate, SHARED by tests/fix_test.js, tests/lane_test.js and tests/live_test.js (23 Nov 2026: lane_test.js's own copy of initGate was deleted; the two were identical except the script hook below).
+// Optional hooks: window.__gate.script (set by initScripted) lets a test choose the text, the delay and the finish_reason (`finish`, default 'stop') of a reply per task; without it the mock behaves as the original lane_test.js mock did.
 // Usage: await page.addInitScript(initGate); then optionally await page.addInitScript(initScripted, cfg).
 // The mock runs INSIDE the page (it wraps fetch for the gate URL): Playwright serialises these functions, so they must not use anything outside themselves.
 
@@ -45,9 +45,9 @@ function initGate() {
         if (mode === 'slowfirst') return;   // never answers: the probe deadline aborts it
         return resolve(json(200, { data: [{ id: 'work-fallback' }, { id: 'work-sonnet' }] }));
       }
-      if (mode === 'ok' && typeof g.script === 'function') {   // optional per-test replies (see initScripted); lane_test.js never sets it
+      if (mode === 'ok' && typeof g.script === 'function') {   // optional per-test replies (see initScripted)
         const r = g.script(body);
-        if (r) { const send = () => resolve(okResponse(model, { pieces: [sse(chunkObj(r.text, { choices: [{ delta: { content: r.text }, finish_reason: 'stop' }] })), sse({ usage: { prompt_tokens: 10, completion_tokens: 5 } }), 'data: [DONE]\n\n'] })); return r.delay ? setTimeout(send, r.delay) : send(); }
+        if (r) { const send = () => resolve(okResponse(model, { pieces: [sse(chunkObj(r.text, { choices: [{ delta: { content: r.text }, finish_reason: r.finish || 'stop' }] })), sse({ usage: { prompt_tokens: 10, completion_tokens: 5 } }), 'data: [DONE]\n\n'] })); return r.delay ? setTimeout(send, r.delay) : send(); }
       }
       switch (mode) {
         case 'ok': return resolve(okResponse(model));
@@ -76,7 +76,7 @@ function initGate() {
   };
 }
 
-// cfg: { detect: [ {text, delay?}, ... ], answer: [...], ... } = a queue of replies per task (the gate request's metadata.hub_task is 'sidekick-<task>'). An empty queue falls through to the normal mock.
+// cfg: { detect: [ {text, delay?, finish?}, ... ], answer: [...], ... } = a queue of replies per task (the gate request's metadata.hub_task is 'sidekick-<task>'). An empty queue falls through to the normal mock.
 function initScripted(cfg) {
   const q = {}; Object.keys(cfg || {}).forEach(k => { q[k] = cfg[k].slice(); });
   window.__gate.script = (body) => {

@@ -21,7 +21,7 @@ Output is check names and PASS/FAIL only. All names and captions are invented. C
 | New call (Drive signed out: tap "clear anyway") ignores captions Teams resends from the old call | old call bleeding into the new one (29 Oct) |
 | New call keeps a new caption that reuses an old id | over-filtering after the fix |
 | Teams re-sends a caption under a new id: no duplicate line | doubled transcript blocks (2 Nov DSM) |
-| Failing gate: 1 to 3 gate chat calls in 8 s | retry storm that burned the 200-call cap with 0 tokens (2 Nov DSM) |
+| Failing gate: exactly 1 gate chat call in 8 s (one summary, never a repeat) | retry storm that burned the 200-call cap with 0 tokens (2 Nov DSM) |
 | Failing gate: failed calls not counted as calls, shown on the pill | cap reached by failures; error hidden |
 | A saved usage count made only of failed calls does not keep the cap blocked | page still capped after reload on 2 Nov |
 | A reply that hits the length limit is retried with more room (the first request is routing.json's wrap value); the full wrap is shown and saved | 435-byte cut-off wrap saved to Drive (3 Nov PBR) |
@@ -107,8 +107,12 @@ Inverted (the old check demanded the fallback; the new one demands the stop): "a
 
 ### Negative runs
 
-The ported and inverted checks were each shown FAILING on a deliberately broken copy of `live.html` (33 mutants, one or two anchored edits each, run on a scratch copy, never in the repo); the ledger and the runner live OUTSIDE this repo in the hub session's build folder.
-A ported check that no mutant fails does not count. Not automated yet: the suites run only when someone runs them (backlog B5).
+The ported and inverted checks were each shown FAILING on a deliberately broken copy of `live.html` (34 mutants, one or two anchored edits each, run on a scratch copy, never in the repo); the ledger and the runner live OUTSIDE this repo in the hub session's build folder.
+A ported check that no mutant fails does not count.
+
+### Check-name manifests
+
+`tests/live_names.json` and `tests/lane_names.json` list every check name each suite must print. A name that a run does not produce prints as `FAIL NOT RUN: <name>`, so a scenario that dies early cannot hide its checks. Adding or renaming a check means updating its manifest and the suite's FLOOR in the same commit, or the clean run goes red. Not automated yet: the suites run only when someone runs them (backlog B5).
 
 ## Rule and rollback (906, 23 Nov 2026)
 

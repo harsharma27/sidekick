@@ -338,6 +338,9 @@ const hidden = (p, sel) => p.isHidden(sel);
 
   await browser.close(); server.close();
   check("suite ran at least " + FLOOR + " checks (a lower count means a scenario stopped early)", results.length >= FLOOR);
+  // a scenario that died leaves checks unreached: each one is printed as a FAIL row (name from tests/lane_names.json), so the floor and the name match still work
+  const have = new Set(results.map(r => r.name));
+  for (const n of JSON.parse(fs.readFileSync(path.join(__dirname, 'lane_names.json'), 'utf8'))) if (!have.has(n)) check('NOT RUN: ' + n, false);
   let failed = 0;
   for (const r of results) { console.log((r.ok ? 'PASS ' : 'FAIL ') + r.name); if (!r.ok) failed++; }
   console.log(failed ? `\n${failed} CHECK(S) FAILED` : '\nAll checks passed');

@@ -139,7 +139,7 @@ const reply = (text, finish) => (finish ? { text, finish } : { text });
     await p.waitForTimeout(300);
     await p.click('#wrapBtn');
     await p.waitForTimeout(900);
-    for (let i = 0; i < 4; i++) await p.evaluate(() => document.getElementById('saveWrap').click());
+    for (let i = 0; i < 4; i++) await p.evaluate(() => { const b = document.getElementById('saveWrap'); b.disabled = false; b.click(); });   // re-enabled each time: the page's own saving guard, not the disabled button, must stop the repeats
     await p.waitForTimeout(1200);
     const saves = await savesOf(p), ups = await uploads(p);
     log = await gateLog(p);
@@ -171,7 +171,7 @@ const reply = (text, finish) => (finish ? { text, finish } : { text });
     await post(p, many);
     await p.waitForTimeout(8000);
     const pill = await p.textContent('#aiPill'), n = chatCalls(await gateLog(p)).length;
-    check('Failing AI: no retry storm (1 to 3 gate chat calls in 8 s)', n >= 1 && n <= 3);
+    check('Failing AI: no retry storm (exactly 1 gate chat call in 8 s: one summary, never a repeat)', n === 1);
     check('Failing AI: failed calls not counted toward the cap', /AI: 0 calls today/.test(pill));
     check('Failing AI: failures shown on the pill', /failed/.test(pill));
     check('Failing AI: no page errors', p.errors.length === 0);
@@ -316,6 +316,9 @@ const reply = (text, finish) => (finish ? { text, finish } : { text });
 
   await browser.close();
   check('suite ran at least ' + FLOOR + ' checks (a lower count means a scenario stopped early)', results.length >= FLOOR);
+  // a scenario that died leaves checks unreached: each one is printed as a FAIL row (name from tests/live_names.json), so the floor and the name match still work
+  const have = new Set(results.map(r => r.name));
+  for (const n of JSON.parse(fs.readFileSync(path.join(__dirname, 'live_names.json'), 'utf8'))) if (!have.has(n)) check('NOT RUN: ' + n, false);
   let failed = 0;
   for (const r of results) { console.log((r.ok ? 'PASS ' : 'FAIL ') + r.name); if (!r.ok) failed++; }
   console.log(failed ? `${failed} check(s) failed: do not commit live.html` : 'All checks passed');

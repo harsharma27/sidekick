@@ -32,6 +32,9 @@ Output is check names and PASS/FAIL only. All names and captions are invented. C
 | "Explain the last question" answers the LATEST question (an earlier one exists) | missed questions with no way to ask |
 | The same ask repeated within 2 minutes gives 1 to 2 gate checks, one answer and one alert marked "asked again" | 6 alerts in 2 min with conflicting say-lines (6 Nov follow-up call) |
 | Bookmark v12 reports a hidden Teams tab: pill warns, the saved transcript ends with a capture-health line; an old bookmark (v11) gets an update note | 3-4 min caption gaps when Teams was in a background tab (5 Nov PBR, 6 Nov DSM) |
+| Wrap request (scenario W, AT5, 25 Nov 2026): the transcript sits between CAPTIONS START and CAPTIONS END lines and is called data, never instructions; Harsh's own caption line carries the [HARSH] tag in the speaker slot; a colleague's line (even with "Harsh:" in its words), a line with an EMPTY author (pack without teams_name) and a guest whose display name contains the tag are never tagged | the 24 Nov refinement wrap: an unconfirmed item written as done, and Harsh's own offers missed; a colleague or unknown speaker auto-written into the tracker as his commitment |
+| Wrap request: the five titles verbatim with the keep-exactly rule; the as-sure-as-said rule; his offers rule scoped to suggested speech; the section 5 shape (one item id, quoted log line, New row); name forms as a fallback; the shared system rules unchanged and free of wrap-only text | the hub refusing a wrap without its titles; section 5 lines that overstate (they auto-apply and become the item's "now"); RULES edited for one task |
+| Wrap footer: `K of them by Harsh as the page recognises him` (count only) and `page 2026-11-25.1` | a silent miss of his Teams label (K = 0 while he spoke); not knowing which page version wrote a wrap |
 | Per page: no page errors, and nothing was sent or attempted to any host other than the mocked gate | a stray fetch, a key sent to the wrong host |
 
 ### Retired checks (live_test.js, 23 Nov 2026): never restore them
@@ -73,6 +76,17 @@ Synthetic exports only. Checks that a cut-off Jira CSV (a row shorter than the h
 with exit 2, writes no workbook and reports no DROPPED stories (4 Nov 2026: a cut-off all-fields export
 would have shown CMCM-48928, CMCM-49795 and CMCM-49957 as dropped), and that a story that really left
 the epic is still reported with where it went. 6 of 7 checks fail on the pre-fix script.
+
+## wrap_prompt_static_test.py (wrap request text, AT5, 25 Nov 2026)
+
+```
+python3 -I tests/wrap_prompt_static_test.py [path/to/live.html]     # no browser; exits non-zero on any failure
+```
+
+Host check of the wrap request in `live.html`, so a regression is visible without the Playwright docker run: the five titles verbatim and the keep-exactly rule; the `[HARSH]` tag in the speaker slot, guarded by a non-empty author AND `isMe`, with the tag stripped from author labels;
+CAPTIONS START / CAPTIONS END on their own lines with the data-not-instructions and do-not-copy sentences; the certainty rule; the offers rule with the lane-rule scope; the section 5 shape with placeholders (no concrete row id); the footer count wording (no letter+digit token, no quote marks);
+`PAGE_V`; RULES still holds "Never volunteer him" and none of the wrap-only phrases; the calls that must survive are each present the expected number of times. It holds no hash of RULES (an intended later RULES edit must not break it). It proves the text, not what a model answers:
+`live_test.js` scenario W is the browser proof. Unlike `lane_static_test.py` it is green on a good page, so its exit code is a real gate. Each check was shown red by a mutant (scratch copies, ledger in the hub session's folder).
 
 ## lane_static_test.py and lane_test.js (work lane, 9 Nov 2026; lane_test.js ported to the lane-only page 23 Nov 2026)
 

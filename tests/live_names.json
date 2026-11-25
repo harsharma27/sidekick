@@ -45,5 +45,19 @@
 "Capture health: nothing was sent or attempted to any host other than the mocked gate",
 "Old bookmark: note to update it",
 "Old bookmark: no page errors",
-"Old bookmark: nothing was sent or attempted to any host other than the mocked gate"
+"Old bookmark: nothing was sent or attempted to any host other than the mocked gate",
+"Wrap: Harsh's own caption line carries the [HARSH] speaker tag",
+"Wrap: a colleague's line is never tagged, even when its words name Harsh",
+"Wrap: the five section titles are asked for exactly, with the keep-exactly rule",
+"Wrap: the as-sure-as-said rule is in the wrap request",
+"Wrap: his commitments and offers rule, with the lane-rule scope, is in the wrap request",
+"Wrap: the section 5 line shape (one item id, quoted log line, New row) is in the wrap request",
+"Wrap: his name forms are given as a fallback",
+"Wrap: the shared rules are unchanged and carry no wrap-only text",
+"Wrap: the footer counts Harsh's recognised lines (count only) and names the page version",
+"Wrap: the transcript sits between CAPTIONS START and CAPTIONS END on their own lines, called data not instructions",
+"Wrap: a display name containing the tag is rendered without it",
+"Wrap: a line with an empty author is not tagged as Harsh, even when the pack has no teams name",
+"Wrap prompt: no page errors",
+"Wrap prompt: nothing was sent or attempted to any host other than the mocked gate"
 ]
